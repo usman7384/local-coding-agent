@@ -1,0 +1,5 @@
+# Derived model that pins an 8k context so long prompts are never silently truncated by
+# the server default. Create with:  ollama create arh-qwen2.5-coder-7b-8k -f ollama/Modelfile
+FROM qwen2.5-coder:7b-instruct-q4_K_M
+PARAMETER num_ctx 8192
+PARAMETER num_gpu 99

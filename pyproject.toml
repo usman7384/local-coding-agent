@@ -1,0 +1,13 @@
+[project]
+name = "local-coding-agent"
+version = "0.1.0"
+description = "Minimal harness for measuring how reliably a small local coding agent fixes bugs"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
