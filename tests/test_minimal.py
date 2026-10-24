@@ -1,7 +1,9 @@
-"""Tests for the harness itself. The last three need Docker and the sandbox image."""
+"""Tests for the harness itself. Tests marked needs_docker need Docker and the sandbox image."""
 
+import json
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -106,3 +108,33 @@ def test_editing_the_tests_is_caught(tmp_path):
     (workdir / "tests" / "test_visible.py").write_text("def test_ok():\n    assert True\n")
     result = grade(TASK, workdir)
     assert result["tampered"] and not result["passed"]
+
+
+def test_pass_at_k_and_pass_hat_k():
+    assert utils.pass_at_k(2, 5, 1) == utils.pass_hat_k(2, 5, 1) == 0.4   # for k = 1 both are just 2/5
+    assert utils.pass_at_k(2, 5, 4) == 1.0      # 4 tries out of 5 must include one of the 2 passes
+    assert utils.pass_hat_k(4, 5, 5) == 0.0     # one failure means "all 5 pass" never happened
+    assert utils.pass_hat_k(5, 5, 3) == 1.0
+
+
+def test_bootstrap_is_repeatable_and_brackets_the_mean():
+    data = [[True, False], [True, True], [False, False], [True, False]]
+    rate = lambda tasks: sum(x for t in tasks for x in t) / sum(len(t) for t in tasks)  # noqa: E731
+    low, high = utils.bootstrap(data, rate)
+    assert (low, high) == utils.bootstrap(data, rate)   # same seed, same interval
+    assert low <= rate(data) <= high
+
+
+def test_stats_script_tells_real_differences_from_noise(tmp_path):
+    def write(folder, passed):                      # 15 tasks x 5 repeats, passed(task, repeat) -> bool
+        (tmp_path / folder).mkdir()
+        rows = [{"task": f"t{t}", "repeat": r, "passed": passed(t, r)} for r in range(5) for t in range(15)]
+        (tmp_path / folder / "results.jsonl").write_text("\n".join(map(json.dumps, rows)))
+    write("a", lambda t, r: (t + r) % 4 == 0)       # about 25% pass, varying by repeat
+    write("b", lambda t, r: (t + r) % 4 != 3)       # about 75% pass: a big, consistent improvement
+    run = lambda *folders: subprocess.run(          # noqa: E731
+        [sys.executable, "stats.py", *[str(tmp_path / f) for f in folders]],
+        capture_output=True, text=True, encoding="utf-8", cwd=TASK.parents[1]).stdout
+    assert "pass^k" in run("a") and "noise band" in run("a")
+    assert "REAL difference" in run("a", "b")
+    assert "within noise" in run("a", "a")

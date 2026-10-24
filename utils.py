@@ -2,6 +2,9 @@
 
 import difflib
 import json
+import random
+from collections import defaultdict
+from math import comb
 from pathlib import Path
 
 
@@ -48,3 +51,28 @@ def append_jsonl(path: Path, row: dict) -> None:
     """Add one JSON object as a new line."""
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row) + "\n")
+
+
+def by_task(rows: list[dict]) -> dict[str, list[bool]]:
+    """Group attempt results by task: {"ringlog-d1": [True, False, ...], ...}, one entry per repeat."""
+    passes = defaultdict(list)
+    for row in rows:
+        passes[row["task"]].append(row["passed"])
+    return dict(passes)
+
+
+def pass_at_k(c: int, n: int, k: int) -> float:
+    """Chance that at least one of k tries passes, given c passes out of n tries (unbiased estimate)."""
+    return 1 - comb(n - c, k) / comb(n, k)
+
+
+def pass_hat_k(c: int, n: int, k: int) -> float:
+    """pass^k: chance that ALL k tries pass, given c passes out of n tries (unbiased estimate)."""
+    return comb(c, k) / comb(n, k)
+
+
+def bootstrap(items: list, stat, rounds: int = 10_000, seed: int = 0) -> tuple[float, float]:
+    """95% confidence interval of stat(items): recompute it on `rounds` random resamples of the items."""
+    rng = random.Random(seed)                                               # fixed seed -> same interval every time
+    values = sorted(stat(rng.choices(items, k=len(items))) for _ in range(rounds))
+    return values[int(0.025 * rounds)], values[int(0.975 * rounds)]          # the middle 95%

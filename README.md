@@ -5,7 +5,7 @@ your own GPU fix bugs?** Not just "can it fix a bug once", but "does it fix it e
 
 The harness gives a local model a small Python project with a planted bug, lets it run commands and
 edit files inside a Docker sandbox, grades the result with tests it never saw, and repeats each task
-5 times. The whole harness is about 280 lines of plain Python, with no dependencies beyond the
+5 times. The whole harness is about 350 lines of plain Python, with no dependencies beyond the
 standard library (plus `pytest` for the tests). It is built to grow, one measured stage at a time, into a
 system with every modern agent component.
 
@@ -39,8 +39,9 @@ Read them in this order:
 | [`agent.py`](agent.py) | 97 | The agent loop: send the conversation to the model, read **one** action from its reply, run it with the matching tool from the `TOOLS` dict, add the result, repeat (max 20 steps) |
 | [`grade.py`](grade.py) | 27 | After the agent stops: check the tests were not edited, then run the visible tests and the hidden tests |
 | [`run.py`](run.py) | 55 | Runs every task 5 times and writes one line per attempt to `results/<run>/results.jsonl`, plus a step-by-step trace |
-| [`report.py`](report.py) | 26 | Prints how often each task passed, pass@1, pass-all, and why attempts failed |
-| [`utils.py`](utils.py) | 50 | Small helpers that keep the files above short: shorten output, fix indentation, diff folders, read and write JSON lines |
+| [`report.py`](report.py) | 25 | Prints how often each task passed, pass@1, pass-all, and why attempts failed |
+| [`stats.py`](stats.py) | 43 | Is a result real? pass@k vs pass^k, a 95% confidence interval, the run-to-run noise band, and a verdict when comparing two runs |
+| [`utils.py`](utils.py) | 78 | Small helpers that keep the files above short: shorten output, fix indentation, diff folders, JSON lines, pass@k / pass^k maths, bootstrap |
 
 Plus [`system_prompt.txt`](system_prompt.txt) (the instructions the model gets), [`tasks/`](tasks/)
 (the 15 bugs) and [`tests/test_minimal.py`](tests/test_minimal.py) (tests for the harness itself).
@@ -99,6 +100,8 @@ python -m pytest -q
 # 4. run: 15 tasks x 5 repeats (about 1.5-2 hours on an RTX 3060 laptop GPU)
 python run.py --run-id baseline --repeats 5
 python report.py results/baseline
+python stats.py results/baseline                      # CI, pass^k, noise band
+python stats.py results/baseline results/my-change    # is a change real or luck?
 ```
 
 Quick try: `python run.py --run-id smoke --repeats 1 --tasks ringlog-d1,workdays-d1`.
@@ -109,6 +112,12 @@ Interrupted runs resume where they stopped. Point it at another model with `LLM_
 
 - **pass@1** = the share of all attempts that passed: how often it works.
 - **pass-all** = the share of tasks that passed in every repeat: how *reliably* it works.
+- **pass@k** = the chance that *at least one* of k tries passes (capability). **pass^k** = the chance that *all* k
+  tries pass (reliability). pass^5 is pass-all, estimated from the data.
+- **95% confidence interval**: resample the 15 tasks 10,000 times (bootstrap) and see how much pass@1 moves.
+- **Noise band**: each repeat is a full pass over all tasks, so the spread between repeats is pure luck. Two runs
+  of the *same* agent can differ by this much, so a change only counts if it beats the band *and* its interval
+  excludes zero.
 
 ## Growing it
 
