@@ -68,7 +68,7 @@ Plus [`system_prompt.txt`](system_prompt.txt) (the instructions the model gets),
    | `BASH: <command>` | `sandbox.py` runs it in Docker against the temp folder. The exit code and output, shortened to 3,000 characters (enough for every task file), go back to the model |
    | `VIEW: <file>` or `VIEW: <file> 10-30` | `tools.py` shows the file, or some lines of it, with line numbers |
    | `SEARCH: <text>` | `tools.py` lists every line containing the text in the project's `.py` files, as `file:line: code` |
-   | `EDIT: <file>` with `<<<<<<< OLD` / `=======` / `>>>>>>> NEW` | `tools.py` replaces the OLD text with the NEW text in the temp folder. OLD must appear exactly once; if only its indentation is wrong, the edit is re-indented to fit the file |
+   | `EDIT: <file>` with `<<<<<<< OLD` / `=======` / `>>>>>>> NEW` | `tools.py` replaces the OLD text with the NEW text in the temp folder. OLD must appear exactly once; wrong indentation and line numbers copied from VIEW are tolerated; an edit that would break Python syntax is refused and nothing is saved |
    | `DONE` | The agent stops |
 
    A reply without exactly one action block is **malformed**: nothing runs, the model is told so,

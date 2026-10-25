@@ -36,6 +36,15 @@ def project_file(workdir: Path, name: str) -> Path | None:
     return file if file.is_relative_to(workdir.resolve()) and file.is_file() else None
 
 
+def syntax_error(source: str) -> str | None:
+    """The first Python syntax error in `source` as "message on line N", or None if it parses."""
+    try:
+        compile(source, "<edit>", "exec")
+    except (SyntaxError, ValueError) as error:
+        return f"{getattr(error, 'msg', error)} on line {getattr(error, 'lineno', '?')}"
+    return None
+
+
 def same_file(a: Path, b: Path) -> bool:
     """True if both files exist and have identical bytes."""
     return a.is_file() and b.is_file() and a.read_bytes() == b.read_bytes()

@@ -3,7 +3,7 @@
     BASH: <command>            run a shell command in the Docker sandbox (tests, ls, ...)
     VIEW: <file> [10-30]       show a file (or some of its lines) with line numbers
     SEARCH: <text>             list every line containing the text, as file:line: code
-    EDIT: <file>               replace text in a file, written as
+    EDIT: <file>               replace text in a file (refused if the result is not valid Python), written as
           <<<<<<< OLD
           exact old lines
           =======
@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 
 import sandbox
-from utils import match_indentation, project_file, shorten
+from utils import match_indentation, project_file, shorten, syntax_error
 
 MAX_OUTPUT = 3000     # characters of tool output shown to the model (every task file fits whole)
 EDIT_FORMAT = re.compile(r"(\S+)\n<<<<<<< OLD\n(.*?)\n=======\n(.*?)\n?>>>>>>> NEW", re.S)
@@ -63,7 +63,11 @@ def edit(workdir: Path, text: str) -> str:
     old, new, note = (old, new, "") if content.count(old) == 1 else match_indentation(content, old, new)
     if content.count(old) != 1:
         return f"EDIT failed: the OLD text appears {content.count(old)} times in {name}; it must appear once."
-    file.write_text(content.replace(old, new), encoding="utf-8", newline="\n")
+    updated = content.replace(old, new)
+    broken = syntax_error(updated) if name.endswith(".py") else None        # lint on edit: never save broken code
+    if broken:
+        return f"EDIT refused, nothing was changed: {name} would no longer be valid Python ({broken})."
+    file.write_text(updated, encoding="utf-8", newline="\n")
     return f"EDIT applied to {name}.{note}"
 
 

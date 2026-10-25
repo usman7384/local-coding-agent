@@ -158,3 +158,12 @@ def test_edit_ignores_line_numbers_copied_from_view(tmp_path):
     edit = "c.py\n<<<<<<< OLD\n   2|     return x - 1\n=======\n   2|     return x + 1\n>>>>>>> NEW"
     assert tools.edit(tmp_path, edit).startswith("EDIT applied")
     assert (tmp_path / "c.py").read_text() == "def f(x):\n    return x + 1\n"
+
+
+def test_edit_refuses_to_break_python_syntax(tmp_path):
+    (tmp_path / "d.py").write_text("def f(x):\n    if x:\n        return 1\n    return 0\n")
+    # Replacing only the body leaves the "if" with nothing under it: refused, file untouched.
+    result = tools.edit(tmp_path, "d.py\n<<<<<<< OLD\n        return 1\n=======\n>>>>>>> NEW")
+    assert result.startswith("EDIT refused") and "valid Python" in result
+    assert (tmp_path / "d.py").read_text() == "def f(x):\n    if x:\n        return 1\n    return 0\n"
+    assert utils.syntax_error("x = (") and utils.syntax_error("x = 1") is None
