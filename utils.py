@@ -3,6 +3,7 @@
 import difflib
 import json
 import random
+import re
 from collections import defaultdict
 from math import comb
 from pathlib import Path
@@ -12,6 +13,11 @@ def shorten(text: str, limit: int) -> str:
     """Keep the start and the end of a long text, cut the middle."""
     half = limit // 2
     return text if len(text) <= limit else f"{text[:half]}\n[... {len(text) - limit} characters cut ...]\n{text[-half:]}"
+
+
+def steady(text: str) -> str:
+    """Remove output that changes between identical runs (test timings, memory addresses), so equal runs stay equal."""
+    return re.sub(r"0x[0-9a-f]{6,}", "0x...", re.sub(r" in \d+\.\d+s", "", text))
 
 
 def match_indentation(content: str, old: str, new: str) -> tuple[str, str, str]:

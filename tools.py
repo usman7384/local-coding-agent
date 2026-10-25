@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 
 import sandbox
-from utils import match_indentation, project_file, shorten, syntax_error
+from utils import match_indentation, project_file, shorten, steady, syntax_error
 
 MAX_OUTPUT = 3000     # characters of tool output shown to the model (every task file fits whole)
 EDIT_FORMAT = re.compile(r"(\S+)\n<<<<<<< OLD\n(.*?)\n=======\n(.*?)\n?>>>>>>> NEW", re.S)
@@ -26,7 +26,7 @@ EDIT_FORMAT = re.compile(r"(\S+)\n<<<<<<< OLD\n(.*?)\n=======\n(.*?)\n?>>>>>>> N
 def bash(workdir: Path, command: str) -> str:
     """Run a shell command in the sandbox and show its exit code and (shortened) output."""
     code, output = sandbox.run(workdir, command)
-    return f"exit code {code}\n{shorten(output, MAX_OUTPUT)}"
+    return f"exit code {code}\n{shorten(steady(output), MAX_OUTPUT)}"  # steady: no timings or addresses
 
 
 def view(workdir: Path, text: str) -> str:

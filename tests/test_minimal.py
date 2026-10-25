@@ -167,3 +167,8 @@ def test_edit_refuses_to_break_python_syntax(tmp_path):
     assert result.startswith("EDIT refused") and "valid Python" in result
     assert (tmp_path / "d.py").read_text() == "def f(x):\n    if x:\n        return 1\n    return 0\n"
     assert utils.syntax_error("x = (") and utils.syntax_error("x = 1") is None
+
+
+def test_steady_removes_run_to_run_noise():
+    text = "==== 1 failed, 3 passed in 0.18s ====\nassert <Cache object at 0x7e9c8cac7620> == 3"
+    assert utils.steady(text) == "==== 1 failed, 3 passed ====\nassert <Cache object at 0x...> == 3"
