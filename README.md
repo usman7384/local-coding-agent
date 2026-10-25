@@ -5,7 +5,7 @@ your own GPU fix bugs?** Not just "can it fix a bug once", but "does it fix it e
 
 The harness gives a local model a small Python project with a planted bug, lets it run commands and
 edit files inside a Docker sandbox, grades the result with tests it never saw, and repeats each task
-5 times. The whole harness is about 350 lines of plain Python, with no dependencies beyond the
+5 times. The whole harness is about 400 lines of plain Python, with no dependencies beyond the
 standard library (plus `pytest` for the tests). It is built to grow, one measured stage at a time, into a
 system with every modern agent component.
 
@@ -20,8 +20,9 @@ The same agent drawn the way LangGraph draws agents: **nodes** are steps, **soli
 
 - `setup` copies the buggy project into a temp folder and reads the bug report (`run.py`).
 - `call_model` sends the conversation to the local LLM and gets one reply (`agent.ask_model`).
-- The reply's action picks the next node through the `TOOLS` dict in `agent.py`: `bash` runs a command in
-  Docker, `edit` changes a file, `malformed` sends a correction. Each result goes back into the conversation,
+- The reply's action picks the next node through the `TOOLS` dict in `tools.py`: `bash` runs a command in
+  Docker, `view` shows a file with line numbers, `search` finds text, `edit` changes a file, `malformed` sends
+  a correction. Each result goes back into the conversation,
   and the loop repeats.
 - `DONE`, or running out of 20 steps, leads to `grade` (`grade.py`) and the end.
 
@@ -36,12 +37,13 @@ Read them in this order:
 | File | Lines | What it does |
 |---|---|---|
 | [`sandbox.py`](sandbox.py) | 26 | Runs one shell command in a fresh Docker container that sees only the task's folder: no network, 1 CPU, 768 MB, non-root, 30-second limit |
-| [`agent.py`](agent.py) | 97 | The agent loop: send the conversation to the model, read **one** action from its reply, run it with the matching tool from the `TOOLS` dict, add the result, repeat (max 20 steps) |
+| [`agent.py`](agent.py) | 61 | The agent loop: send the conversation to the model, read **one** action from its reply, run the matching tool, add the result, repeat (max 20 steps) |
+| [`tools.py`](tools.py) | 77 | The agent's tools (`bash`, `view`, `search`, `edit`) and the `TOOLS` dict that maps each action name to one. Adding a tool = one function + one dict line |
 | [`grade.py`](grade.py) | 27 | After the agent stops: check the tests were not edited, then run the visible tests and the hidden tests |
 | [`run.py`](run.py) | 55 | Runs every task 5 times and writes one line per attempt to `results/<run>/results.jsonl`, plus a step-by-step trace |
 | [`report.py`](report.py) | 25 | Prints how often each task passed, pass@1, pass-all, and why attempts failed |
 | [`stats.py`](stats.py) | 43 | Is a result real? pass@k vs pass^k, a 95% confidence interval, the run-to-run noise band, and a verdict when comparing two runs |
-| [`utils.py`](utils.py) | 78 | Small helpers that keep the files above short: shorten output, fix indentation, diff folders, JSON lines, pass@k / pass^k maths, bootstrap |
+| [`utils.py`](utils.py) | 84 | Small helpers that keep the files above short: shorten output, fix indentation, diff folders, JSON lines, pass@k / pass^k maths, bootstrap |
 
 Plus [`system_prompt.txt`](system_prompt.txt) (the instructions the model gets), [`tasks/`](tasks/)
 (the 15 bugs) and [`tests/test_minimal.py`](tests/test_minimal.py) (tests for the harness itself).
@@ -64,7 +66,9 @@ Plus [`system_prompt.txt`](system_prompt.txt) (the instructions the model gets),
    | Action | What happens |
    |---|---|
    | `BASH: <command>` | `sandbox.py` runs it in Docker against the temp folder. The exit code and output, shortened to 3,000 characters (enough for every task file), go back to the model |
-   | `EDIT: <file>` with `<<<<<<< OLD` / `=======` / `>>>>>>> NEW` | `agent.py` replaces the OLD text with the NEW text in the temp folder. OLD must appear exactly once; if only its indentation is wrong, the edit is re-indented to fit the file |
+   | `VIEW: <file>` or `VIEW: <file> 10-30` | `tools.py` shows the file, or some lines of it, with line numbers |
+   | `SEARCH: <text>` | `tools.py` lists every line containing the text in the project's `.py` files, as `file:line: code` |
+   | `EDIT: <file>` with `<<<<<<< OLD` / `=======` / `>>>>>>> NEW` | `tools.py` replaces the OLD text with the NEW text in the temp folder. OLD must appear exactly once; if only its indentation is wrong, the edit is re-indented to fit the file |
    | `DONE` | The agent stops |
 
    A reply without exactly one action block is **malformed**: nothing runs, the model is told so,

@@ -9,11 +9,13 @@ Finished attempts are skipped, so an interrupted run can simply be started again
 import argparse
 import json
 import shutil
+import sys
 import tempfile
 import time
 import zlib
 from pathlib import Path
 
+import sandbox
 from agent import run_agent
 from grade import grade
 from utils import append_jsonl, diff_dirs, read_jsonl
@@ -29,6 +31,8 @@ tasks = [t for t in tasks if not args.tasks or t.name in args.tasks.split(",")]
 out = Path("results") / args.run_id
 (out / "traces").mkdir(parents=True, exist_ok=True)
 finished = {(row["task"], row["repeat"]) for row in read_jsonl(out / "results.jsonl")}  # for resuming
+# If Docker cannot start a container, stop the whole run: a crashed sandbox would look like a failed attempt.
+docker_ok = lambda: sandbox.run(out, "true")[0] == 0 or sys.exit("Docker is not working. Fix it and rerun to resume.")  # noqa: E731
 
 for repeat in range(args.repeats):          # all tasks once, then all tasks again, ... (so partial runs stay even)
     for task in tasks:
@@ -39,10 +43,12 @@ for repeat in range(args.repeats):          # all tasks once, then all tasks aga
         shutil.copytree(task / "repo", workdir, dirs_exist_ok=True)
         start = time.time()
 
+        docker_ok()                                                # never blame the agent for a broken Docker
         trace = run_agent((task / "prompt.txt").read_text(encoding="utf-8"), workdir, seed)
         diff = diff_dirs(task / "repo" / "src", workdir / "src")    # what the agent changed
         result = grade(task, workdir)
         shutil.rmtree(workdir, ignore_errors=True)
+        docker_ok()                                                # still working? otherwise this attempt is not saved
 
         said_done = bool(trace) and trace[-1]["action"] == "DONE"
         outcome = ("passed" if result["passed"] else "tampered" if result["tampered"]

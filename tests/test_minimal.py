@@ -8,6 +8,7 @@ import sys
 import pytest
 
 import agent
+import tools
 import utils
 from grade import grade
 
@@ -30,18 +31,18 @@ def test_parse_action():
 
 def test_edit_file(tmp_path):
     (tmp_path / "a.py").write_text("x = 1\ny = 2\n")
-    assert agent.edit(tmp_path, "a.py\n<<<<<<< OLD\nx = 1\n=======\nx = 3\n>>>>>>> NEW").startswith("EDIT applied")
+    assert tools.edit(tmp_path, "a.py\n<<<<<<< OLD\nx = 1\n=======\nx = 3\n>>>>>>> NEW").startswith("EDIT applied")
     assert (tmp_path / "a.py").read_text() == "x = 3\ny = 2\n"
-    assert "appears 0 times" in agent.edit(tmp_path, "a.py\n<<<<<<< OLD\nz = 9\n=======\nz = 1\n>>>>>>> NEW")
-    assert "does not exist" in agent.edit(tmp_path, "b.py\n<<<<<<< OLD\nx\n=======\ny\n>>>>>>> NEW")
-    assert "does not exist" in agent.edit(tmp_path, "../a.py\n<<<<<<< OLD\nx\n=======\ny\n>>>>>>> NEW")
-    assert "EDIT failed" in agent.edit(tmp_path, "a.py\nx = 3")
+    assert "appears 0 times" in tools.edit(tmp_path, "a.py\n<<<<<<< OLD\nz = 9\n=======\nz = 1\n>>>>>>> NEW")
+    assert "does not exist" in tools.edit(tmp_path, "b.py\n<<<<<<< OLD\nx\n=======\ny\n>>>>>>> NEW")
+    assert "does not exist" in tools.edit(tmp_path, "../a.py\n<<<<<<< OLD\nx\n=======\ny\n>>>>>>> NEW")
+    assert "EDIT failed" in tools.edit(tmp_path, "a.py\nx = 3")
 
 
 def test_edit_tolerates_wrong_indentation(tmp_path):
     (tmp_path / "b.py").write_text("def f(x):\n    if x:\n        return 1\n    return 0\n")
     # OLD and NEW are written with 4 spaces too few; the edit still lands, re-indented to fit the file.
-    result = agent.edit(tmp_path, "b.py\n<<<<<<< OLD\nif x:\n    return 1\n=======\nif not x:\n    return 1\n>>>>>>> NEW")
+    result = tools.edit(tmp_path, "b.py\n<<<<<<< OLD\nif x:\n    return 1\n=======\nif not x:\n    return 1\n>>>>>>> NEW")
     assert result == "EDIT applied to b.py. (indentation adjusted)"
     assert (tmp_path / "b.py").read_text() == "def f(x):\n    if not x:\n        return 1\n    return 0\n"
 
@@ -55,27 +56,27 @@ def test_run_agent_with_a_fake_model(tmp_path, monkeypatch):
         block("DONE"),
     ])
     monkeypatch.setattr(agent, "ask_model", lambda messages, seed: next(replies))
-    monkeypatch.setattr(agent.sandbox, "run", lambda workdir, command: (0, "1 passed"))
+    monkeypatch.setattr(tools.sandbox, "run", lambda workdir, command: (0, "1 passed"))
     trace = agent.run_agent("Fix the bug.", tmp_path, seed=7)
     assert [s["action"] for s in trace] == ["MALFORMED", "BASH", "EDIT", "DONE"]
     assert (tmp_path / "a.py").read_text() == "x = 2\n"
 
 
 def test_long_output_is_shortened():
-    half = agent.MAX_OUTPUT // 2
+    half = tools.MAX_OUTPUT // 2
     text = "a" * (half + 250) + "b" * (half + 250)
-    short = utils.shorten(text, agent.MAX_OUTPUT)
+    short = utils.shorten(text, tools.MAX_OUTPUT)
     assert short.startswith("a" * half) and short.endswith("b" * half) and "500 characters cut" in short
 
 
 def test_every_task_file_is_shown_whole():
     for source in TASK.parent.glob("*/repo/src/*.py"):
-        assert len(source.read_text(encoding="utf-8")) <= agent.MAX_OUTPUT, source
+        assert len(source.read_text(encoding="utf-8")) <= tools.MAX_OUTPUT, source
 
 
 def docker_ready():
     try:
-        image = subprocess.run(["docker", "image", "inspect", agent.sandbox.IMAGE], capture_output=True, timeout=30)
+        image = subprocess.run(["docker", "image", "inspect", tools.sandbox.IMAGE], capture_output=True, timeout=30)
         return image.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -138,3 +139,22 @@ def test_stats_script_tells_real_differences_from_noise(tmp_path):
     assert "pass^k" in run("a") and "noise band" in run("a")
     assert "REAL difference" in run("a", "b")
     assert "within noise" in run("a", "a")
+
+
+def test_view_and_search(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("def f(x):\n    return x + 1\n\ndef g():\n    return f(2)\n")
+    assert tools.view(tmp_path, "src/a.py").splitlines()[1] == "   2|     return x + 1"   # numbered lines
+    assert tools.view(tmp_path, "src/a.py 4-5").splitlines() == ["   4| def g():", "   5|     return f(2)"]
+    assert "VIEW failed" in tools.view(tmp_path, "../a.py") and "VIEW failed" in tools.view(tmp_path, "src/a.py x-y")
+    assert tools.search(tmp_path, "f(").splitlines() == ["src/a.py:1: def f(x):", "src/a.py:5: return f(2)"]
+    assert "No line contains" in tools.search(tmp_path, "zzz")
+    assert agent.parse_action(block("VIEW: src/a.py 4-5")) == ("VIEW", "src/a.py 4-5")   # new tools parse too
+    assert agent.parse_action(block("SEARCH: def g")) == ("SEARCH", "def g")
+
+
+def test_edit_ignores_line_numbers_copied_from_view(tmp_path):
+    (tmp_path / "c.py").write_text("def f(x):\n    return x - 1\n")
+    edit = "c.py\n<<<<<<< OLD\n   2|     return x - 1\n=======\n   2|     return x + 1\n>>>>>>> NEW"
+    assert tools.edit(tmp_path, edit).startswith("EDIT applied")
+    assert (tmp_path / "c.py").read_text() == "def f(x):\n    return x + 1\n"

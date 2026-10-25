@@ -30,6 +30,12 @@ def match_indentation(content: str, old: str, new: str) -> tuple[str, str, str]:
     return "\n".join(found), "\n".join(new_lines), " (indentation adjusted)"
 
 
+def project_file(workdir: Path, name: str) -> Path | None:
+    """The existing file `name` inside `workdir`, or None if it is missing or points outside the project."""
+    file = (workdir / name).resolve()
+    return file if file.is_relative_to(workdir.resolve()) and file.is_file() else None
+
+
 def same_file(a: Path, b: Path) -> bool:
     """True if both files exist and have identical bytes."""
     return a.is_file() and b.is_file() and a.read_bytes() == b.read_bytes()
