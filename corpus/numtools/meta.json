@@ -1,0 +1,9 @@
+{
+  "name": "numtools",
+  "family": "numeric",
+  "files": ["numtools.py"],
+  "entries": {"clamp": "numtools.py", "round_to_step": "numtools.py", "percentile": "numtools.py", "moving_average": "numtools.py"},
+  "helpers": {
+    "_rank_index": {"file": "numtools.py", "caller": "percentile", "hops": 1}
+  }
+}

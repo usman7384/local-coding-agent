@@ -1,0 +1,7 @@
+{
+  "name": "timespan",
+  "family": "string_parsing",
+  "files": ["timespan.py"],
+  "entries": {"parse_span": "timespan.py", "format_span": "timespan.py"},
+  "helpers": {"_split_tokens": {"file": "timespan.py", "caller": "parse_span", "hops": 1}}
+}

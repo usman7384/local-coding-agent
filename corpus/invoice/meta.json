@@ -1,0 +1,45 @@
+{
+  "name": "invoice",
+  "family": "numeric",
+  "files": [
+    "money.py",
+    "invoice.py"
+  ],
+  "entries": {
+    "Invoice.add_line": "invoice.py",
+    "Invoice.subtotal": "invoice.py",
+    "Invoice.total": "invoice.py",
+    "Invoice.tax": "invoice.py",
+    "Invoice.summary": "invoice.py"
+  },
+  "helpers": {
+    "to_cents": {
+      "file": "money.py",
+      "caller": "Invoice.add_line",
+      "hops": 1
+    },
+    "percent_of": {
+      "file": "money.py",
+      "caller": "Invoice.tax",
+      "hops": 1
+    },
+    "format_cents": {
+      "file": "money.py",
+      "caller": "Invoice.summary",
+      "hops": 1
+    },
+    "Invoice.discount": {
+      "file": "invoice.py",
+      "caller": "Invoice.tax",
+      "hops": 1
+    }
+  },
+  "prose_ok": [
+    "subtotal",
+    "tax",
+    "total",
+    "discount",
+    "summary",
+    "split"
+  ]
+}

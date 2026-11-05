@@ -35,9 +35,10 @@ print(f"repeats scored {', '.join(f'{p:.0%}' for p in per_repeat)}: two runs of 
 
 # 4. Compare a second run with the first, task by task (only when two folders are given).
 if len(runs) == 2:
-    pairs = [(tries, by_task(runs[1]).get(task, [])) for task, tries in base.items()]
+    other = by_task(runs[1])
+    pairs = [(tries, other[task]) for task, tries in base.items() if task in other]   # only tasks both runs have
     diff = lambda ps: pass_rate(b for _, b in ps) - pass_rate(a for a, _ in ps)  # noqa: E731
     low, high = bootstrap(pairs, diff)
     real = (low > 0 or high < 0) and abs(diff(pairs)) > band   # CI excludes 0 AND bigger than luck
-    print(f"\n{sys.argv[2]} vs {sys.argv[1]}: pass@1 {diff(pairs):+.0%}, 95% CI [{low:+.0%}, {high:+.0%}] "
+    print(f"\n{sys.argv[2]} vs {sys.argv[1]} on {len(pairs)} shared tasks: pass@1 {diff(pairs):+.0%}, 95% CI [{low:+.0%}, {high:+.0%}] "
           f"-> {'REAL difference' if real else 'within noise'}")

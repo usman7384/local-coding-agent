@@ -21,7 +21,8 @@ from tools import TOOLS, view
 from utils import project_file
 
 MODEL = os.environ.get("LLM_MODEL", "arh-qwen2.5-coder-7b-8k")
-URL = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1") + "/chat/completions"
+SERVER = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")
+URL = SERVER + "/chat/completions"
 SYSTEM_PROMPT = (Path(__file__).parent / "system_prompt.txt").read_text(encoding="utf-8")
 
 MAX_STEPS = 20        # the agent gets at most 20 model replies
@@ -29,12 +30,15 @@ KEEP_MESSAGES = 10    # the model sees the system prompt, the bug report and onl
 OPEN_FILES = 2        # the files it viewed or edited most recently are always shown, fresh from disk
 
 
-def ask_model(messages: list[dict], seed: int) -> str:
-    """One call to the local model through its OpenAI-compatible chat API."""
+def ask_model(messages: list[dict], seed: int) -> tuple[str, dict]:
+    """One call to the local model through its OpenAI-compatible chat API. Returns the reply and its token counts."""
     body = {"model": MODEL, "messages": messages, "seed": seed, "temperature": 0.7, "top_p": 0.9, "max_tokens": 768}
     request = urllib.request.Request(URL, json.dumps(body).encode(), {"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=600) as response:
-        return json.load(response)["choices"][0]["message"]["content"]
+        answer = json.load(response)
+    usage = answer["usage"]                                             # tokens read and written by this call
+    return answer["choices"][0]["message"]["content"], {"tokens_in": usage["prompt_tokens"],
+                                                        "tokens_out": usage["completion_tokens"]}
 
 
 def parse_action(reply: str) -> tuple[str, str]:
@@ -54,12 +58,12 @@ def run_agent(bug_report: str, workdir: Path, seed: int) -> list[dict]:
         panel = [{"role": "user", "content": f"Current content of the files you are working on:\n\n{files}"}] if opened else []
         messages = [{"role": "system", "content": SYSTEM_PROMPT},           # how to behave
                     {"role": "user", "content": bug_report}] + history[-KEEP_MESSAGES:] + panel  # task, recent steps, files
-        reply = ask_model(messages, seed=seed * 100 + step)                 # same seed -> same sampling
+        reply, tokens = ask_model(messages, seed=seed * 100 + step)         # same seed -> same sampling
         kind, text = parse_action(reply)
         if kind == "DONE":
-            return trace + [{"step": step, "reply": reply, "action": "DONE"}]
+            return trace + [{"step": step, "reply": reply, "action": "DONE", **tokens}]
         result = TOOLS[kind](workdir, text)                                 # run the chosen tool
-        trace.append({"step": step, "reply": reply, "action": kind, "result": result})
+        trace.append({"step": step, "reply": reply, "action": kind, "result": result, **tokens})
         name = text.split()[0] if kind in ("VIEW", "EDIT") and text else ""     # the file this action touched
         opened = ([f for f in opened if f != name] + [name])[-OPEN_FILES:] if project_file(workdir, name) else opened
         # Small models copy their own past replies, so a malformed one is not kept in the history.

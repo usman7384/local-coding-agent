@@ -1,0 +1,11 @@
+{
+  "name": "inventory",
+  "family": "stateful_class",
+  "files": ["ledger.py", "stock.py"],
+  "entries": {"StockKeeper.restock": "stock.py", "StockKeeper.reserve": "stock.py", "StockKeeper.ship": "stock.py", "StockKeeper.available": "stock.py"},
+  "helpers": {
+    "Ledger.balance": {"file": "ledger.py", "caller": "StockKeeper.on_hand", "hops": 1},
+    "Ledger.record": {"file": "ledger.py", "caller": "StockKeeper.restock", "hops": 1},
+    "StockKeeper.release": {"file": "stock.py", "caller": "StockKeeper.ship", "hops": 1}
+  }
+}

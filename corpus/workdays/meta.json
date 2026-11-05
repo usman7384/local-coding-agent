@@ -1,0 +1,10 @@
+{
+  "name": "workdays",
+  "family": "date_arithmetic",
+  "files": ["workdays.py"],
+  "entries": {"add_workdays": "workdays.py", "workdays_between": "workdays.py", "add_months": "workdays.py"},
+  "helpers": {
+    "is_workday": {"file": "workdays.py", "caller": "add_workdays", "hops": 1},
+    "_days_in_month": {"file": "workdays.py", "caller": "add_months", "hops": 1}
+  }
+}

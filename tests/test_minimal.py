@@ -13,6 +13,7 @@ import utils
 from grade import grade
 
 TASK = agent.Path(__file__).resolve().parents[1] / "tasks" / "ringlog-d1"
+TOKENS = {"tokens_in": 100, "tokens_out": 20}      # what a fake model call reports
 
 
 def block(body):
@@ -55,7 +56,7 @@ def test_run_agent_with_a_fake_model(tmp_path, monkeypatch):
         block("EDIT: a.py\n<<<<<<< OLD\nx = 1\n=======\nx = 2\n>>>>>>> NEW"),
         block("DONE"),
     ])
-    monkeypatch.setattr(agent, "ask_model", lambda messages, seed: next(replies))
+    monkeypatch.setattr(agent, "ask_model", lambda messages, seed: (next(replies), TOKENS))
     monkeypatch.setattr(tools.sandbox, "run", lambda workdir, command: (0, "1 passed"))
     trace = agent.run_agent("Fix the bug.", tmp_path, seed=7)
     assert [s["action"] for s in trace] == ["MALFORMED", "BASH", "EDIT", "DONE"]
@@ -178,8 +179,23 @@ def test_open_files_panel_shows_current_file_content(tmp_path, monkeypatch):
     (tmp_path / "a.py").write_text("x = 1\n")
     replies = iter([block("VIEW: a.py"), block("EDIT: a.py\n<<<<<<< OLD\nx = 1\n=======\nx = 2\n>>>>>>> NEW"), block("DONE")])
     seen = []                                       # the messages the model received at each step
-    monkeypatch.setattr(agent, "ask_model", lambda messages, seed: seen.append(messages) or next(replies))
+    monkeypatch.setattr(agent, "ask_model", lambda messages, seed: (seen.append(messages) or next(replies), TOKENS))
     agent.run_agent("Fix the bug.", tmp_path, seed=1)
     assert "Current content" not in seen[0][-1]["content"]              # nothing opened yet at step 1
     assert "   1| x = 1" in seen[1][-1]["content"]                      # after VIEW: the file is shown
     assert "   1| x = 2" in seen[2][-1]["content"]                      # after EDIT: the NEW content, fresh from disk
+
+
+def test_provenance_names_the_commit_and_the_model(monkeypatch):
+    answers = {"http://ollama/api/tags": {"models": [{"name": "m:latest", "digest": "abcdef1234567890"}]},
+               "http://ollama/api/version": {"version": "1.2.3"}}
+    monkeypatch.setattr(utils, "get_json", answers.get)                 # no real server needed
+    stamp = utils.provenance("m", "http://ollama/v1")
+    assert stamp["model_digest"] == "abcdef123456" and stamp["ollama"] == "1.2.3"
+    assert len(stamp["commit"].removesuffix("-dirty")) >= 7             # a short git commit id
+
+
+def test_functions_and_docstrings_find_what_make_tasks_needs():
+    source = "def f(x):\n    return x\n\n\nclass C:\n    def g(self):\n        pass\n"
+    assert utils.functions(source) == [("f", 1, 2), ("C.g", 6, 7)]                 # methods are named Class.method
+    assert utils.docstrings('def test_a():\n    """A works."""\n\n\ndef helper():\n    pass\n') == {"test_a": "A works."}

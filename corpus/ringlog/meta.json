@@ -1,0 +1,9 @@
+{
+  "name": "ringlog",
+  "family": "data_structure",
+  "files": ["ringlog.py"],
+  "entries": {"RingLog.append": "ringlog.py", "RingLog.popleft": "ringlog.py", "RingLog.snapshot": "ringlog.py", "RingLog.tail": "ringlog.py"},
+  "helpers": {
+    "RingLog._index": {"file": "ringlog.py", "caller": "RingLog.append", "hops": 1}
+  }
+}

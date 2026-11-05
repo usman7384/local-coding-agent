@@ -1,9 +1,12 @@
 """Small helpers used by the harness. Nothing in here is about agents; it just keeps the main files short."""
 
+import ast
 import difflib
 import json
 import random
 import re
+import subprocess
+import urllib.request
 from collections import defaultdict
 from math import comb
 from pathlib import Path
@@ -97,3 +100,38 @@ def bootstrap(items: list, stat, rounds: int = 10_000, seed: int = 0) -> tuple[f
     rng = random.Random(seed)                                               # fixed seed -> same interval every time
     values = sorted(stat(rng.choices(items, k=len(items))) for _ in range(rounds))
     return values[int(0.025 * rounds)], values[int(0.975 * rounds)]          # the middle 95%
+
+
+def get_json(url: str, default):
+    """GET a URL and parse its JSON answer, or return `default` if the server does not offer it."""
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            return json.load(response)
+    except OSError:
+        return default
+
+
+def provenance(model: str, server: str) -> dict:
+    """Which code, model and server produced a result, so every number can be traced back to them."""
+    git = lambda *args: subprocess.run(["git", *args], capture_output=True, text=True).stdout.strip()  # noqa: E731
+    dirty = "-dirty" if git("status", "--porcelain", "--", "*.py", "*.txt") else ""  # uncommitted code changes
+    ollama = server.removesuffix("/v1")                                  # Ollama's own API sits next to /v1
+    digests = {m["name"]: m["digest"][:12] for m in get_json(ollama + "/api/tags", {"models": []})["models"]}
+    return {"commit": git("rev-parse", "--short", "HEAD") + dirty, "model": model,
+            "model_digest": digests.get(model, digests.get(model + ":latest", "unknown")),
+            "ollama": get_json(ollama + "/api/version", {"version": "unknown"})["version"]}
+
+
+def functions(source: str) -> list[tuple[str, int, int]]:
+    """(name, first line, last line) of every function and method in `source`; methods are named Class.method."""
+    found = []
+    for node in ast.parse(source).body:
+        prefix, inner = (node.name + ".", node.body) if isinstance(node, ast.ClassDef) else ("", [node])
+        found += [(prefix + f.name, f.lineno, f.end_lineno) for f in inner if isinstance(f, ast.FunctionDef)]
+    return found
+
+
+def docstrings(test_source: str) -> dict[str, str]:
+    """test name -> its docstring, for every test function in a test file."""
+    return {f.name: ast.get_docstring(f) or "" for f in ast.parse(test_source).body
+            if isinstance(f, ast.FunctionDef) and f.name.startswith("test_")}

@@ -1,0 +1,10 @@
+{
+  "name": "snapshots",
+  "family": "file_handling",
+  "files": ["snapshots.py"],
+  "entries": {"save_snapshot": "snapshots.py", "load_snapshot": "snapshots.py", "prune": "snapshots.py", "list_snapshots": "snapshots.py"},
+  "helpers": {
+    "_number_of": {"file": "snapshots.py", "caller": "list_snapshots", "hops": 1},
+    "_name_for": {"file": "snapshots.py", "caller": "save_snapshot", "hops": 1}
+  }
+}

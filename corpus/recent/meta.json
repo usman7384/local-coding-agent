@@ -1,0 +1,11 @@
+{
+  "name": "recent",
+  "family": "data_structure",
+  "files": ["recent.py"],
+  "entries": {"RecentCache.put": "recent.py", "RecentCache.get": "recent.py"},
+  "helpers": {
+    "RecentCache._touch": {"file": "recent.py", "caller": "RecentCache.get", "hops": 1},
+    "RecentCache._evict": {"file": "recent.py", "caller": "RecentCache.put", "hops": 1},
+    "RecentCache._expired": {"file": "recent.py", "caller": "RecentCache.get", "hops": 1}
+  }
+}

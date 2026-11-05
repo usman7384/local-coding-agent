@@ -4,8 +4,8 @@ A teaching-sized harness that answers one question: **how reliably does a small 
 your own GPU fix bugs?** Not just "can it fix a bug once", but "does it fix it every time?"
 
 The harness gives a local model a small Python project with a planted bug, lets it run commands and
-edit files inside a Docker sandbox, grades the result with tests it never saw, and repeats each task
-5 times. The whole harness is about 400 lines of plain Python, with no dependencies beyond the
+edit files inside a Docker sandbox, grades the result with tests it never saw, and repeats each of its 45 tasks
+3 times. The whole harness is about 400 lines of plain Python, with no dependencies beyond the
 standard library (plus `pytest` for the tests). It is built to grow, one measured stage at a time, into a
 system with every modern agent component.
 
@@ -39,16 +39,25 @@ Read them in this order:
 | File | Lines | What it does |
 |---|---|---|
 | [`sandbox.py`](sandbox.py) | 26 | Runs one shell command in a fresh Docker container that sees only the task's folder: no network, 1 CPU, 768 MB, non-root, 30-second limit |
-| [`agent.py`](agent.py) | 61 | The agent loop: send the conversation to the model, read **one** action from its reply, run the matching tool, add the result, repeat (max 20 steps) |
+| [`agent.py`](agent.py) | 72 | The agent loop: send the conversation to the model, read **one** action from its reply, run the matching tool, add the result, repeat (max 20 steps) |
 | [`tools.py`](tools.py) | 77 | The agent's tools (`bash`, `view`, `search`, `edit`) and the `TOOLS` dict that maps each action name to one. Adding a tool = one function + one dict line |
 | [`grade.py`](grade.py) | 27 | After the agent stops: check the tests were not edited, then run the visible tests and the hidden tests |
-| [`run.py`](run.py) | 55 | Runs every task 5 times and writes one line per attempt to `results/<run>/results.jsonl`, plus a step-by-step trace |
-| [`report.py`](report.py) | 25 | Prints how often each task passed, pass@1, pass-all, and why attempts failed |
-| [`stats.py`](stats.py) | 43 | Is a result real? pass@k vs pass^k, a 95% confidence interval, the run-to-run noise band, and a verdict when comparing two runs |
-| [`utils.py`](utils.py) | 84 | Small helpers that keep the files above short: shorten output, fix indentation, diff folders, JSON lines, pass@k / pass^k maths, bootstrap |
+| [`run.py`](run.py) | 68 | Runs every task 5 times and writes one line per attempt to `results/<run>/results.jsonl`, plus a step-by-step trace. Each line also records tokens, the git commit, the model digest and the Ollama version |
+| [`report.py`](report.py) | 45 | Prints how often each task passed, pass@1, pass-all, why attempts failed, how many edits applied, tokens per attempt and per success, and pass@1 on the held-out tasks |
+| [`stats.py`](stats.py) | 44 | Is a result real? pass@k vs pass^k, a 95% confidence interval, the run-to-run noise band, and a verdict when comparing two runs |
+| [`utils.py`](utils.py) | 137 | Small helpers that keep the files above short: shorten output, fix indentation, diff folders, JSON lines, pass@k / pass^k maths, bootstrap, provenance, finding functions and test docstrings |
+| [`make_tasks.py`](make_tasks.py) | 147 | Makes the tasks: breaks one line of a correct project in `corpus/` and keeps the bug only if the tests catch it |
 
 Plus [`system_prompt.txt`](system_prompt.txt) (the instructions the model gets), [`tasks/`](tasks/)
-(the 15 bugs) and [`tests/test_minimal.py`](tests/test_minimal.py) (tests for the harness itself).
+(the 45 bugs), [`make_tasks.py`](make_tasks.py) with [`corpus/`](corpus/) (how the bugs are made, below) and
+[`tests/test_minimal.py`](tests/test_minimal.py) (tests for the harness itself).
+
+**How the tasks are made.** [`corpus/`](corpus/) holds 9 small, correct projects, each with visible tests and
+hidden tests whose docstrings say what users expect. `make_tasks.py` breaks one line the way people do
+(`<=` becomes `<`, `+ 1` becomes `- 1`, `min` becomes `max`, a line is deleted, ...) and keeps the bug only if the
+code still parses, some visible **and** some hidden tests fail, and some visible tests still pass. The bug report
+lists the docstrings of the failing visible tests. D1 = the bug is in a function the tests call, D2 = in a helper
+one call away, D3 = two bugs in two files. It is plain mutation testing: no model, no GPU, a few minutes on the CPU.
 
 ## How one attempt works
 
@@ -104,24 +113,26 @@ docker build -t agent-reliability-sandbox:1 docker/
 # 3. check the harness itself (fake model + real Docker grading)
 python -m pytest -q
 
-# 4. run: 15 tasks x 5 repeats (about 1.5-2 hours on an RTX 3060 laptop GPU)
-python run.py --run-id baseline --repeats 5
+# 4. run: 45 tasks x 3 repeats (about 3.5 hours on an RTX 3060 laptop GPU)
+python run.py --run-id baseline
 python report.py results/baseline
 python stats.py results/baseline                      # CI, pass^k, noise band
 python stats.py results/baseline results/my-change    # is a change real or luck?
 ```
 
 Quick try: `python run.py --run-id smoke --repeats 1 --tasks ringlog-d1,workdays-d1`.
-Interrupted runs resume where they stopped. Point it at another model with `LLM_MODEL` and
-`LLM_BASE_URL` (any OpenAI-compatible server).
+Interrupted runs resume where they stopped, but only with the same commit and model: if either
+changed, `run.py` stops and asks for a new `--run-id`, so one run never mixes two experiments. Point it at
+another model with `LLM_MODEL` and `LLM_BASE_URL` (any OpenAI-compatible server; the model digest and server
+version are read from Ollama and recorded as "unknown" elsewhere).
 
 ## What this measures
 
 - **pass@1** = the share of all attempts that passed: how often it works.
 - **pass-all** = the share of tasks that passed in every repeat: how *reliably* it works.
 - **pass@k** = the chance that *at least one* of k tries passes (capability). **pass^k** = the chance that *all* k
-  tries pass (reliability). pass^5 is pass-all, estimated from the data.
-- **95% confidence interval**: resample the 15 tasks 10,000 times (bootstrap) and see how much pass@1 moves.
+  tries pass (reliability). pass^k for k = the number of repeats is pass-all, estimated from the data.
+- **95% confidence interval**: resample the tasks 10,000 times (bootstrap) and see how much pass@1 moves.
 - **Noise band**: each repeat is a full pass over all tasks, so the spread between repeats is pure luck. Two runs
   of the *same* agent can differ by this much, so a change only counts if it beats the band *and* its interval
   excludes zero.

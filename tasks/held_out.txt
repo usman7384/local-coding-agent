@@ -1,0 +1,9 @@
+inventory-d2b
+invoice-d2b
+kvconfig-d1
+numtools-d1c
+recent-d2b
+ringlog-d1e
+snapshots-d1d
+timespan-d1c
+workdays-d2b

@@ -1,0 +1,12 @@
+{
+  "name": "kvconfig",
+  "family": "string_parsing",
+  "files": ["lexer.py", "settings.py"],
+  "entries": {"load": "settings.py", "get_path": "settings.py"},
+  "helpers": {
+    "classify": {"file": "lexer.py", "caller": "load", "hops": 1},
+    "coerce": {"file": "settings.py", "caller": "load", "hops": 1},
+    "strip_comment": {"file": "lexer.py", "caller": "classify", "hops": 2},
+    "unquote": {"file": "lexer.py", "caller": "classify", "hops": 2}
+  }
+}
