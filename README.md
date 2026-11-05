@@ -20,6 +20,8 @@ The same agent drawn the way LangGraph draws agents: **nodes** are steps, **soli
 
 - `setup` copies the buggy project into a temp folder and reads the bug report (`run.py`).
 - `call_model` sends the conversation to the local LLM and gets one reply (`agent.ask_model`).
+- `open files` re-reads the (at most 2) files the agent viewed or edited most recently and shows them,
+  with line numbers, at the end of every prompt, so the model edits the real code, not its memory of it.
 - The reply's action picks the next node through the `TOOLS` dict in `tools.py`: `bash` runs a command in
   Docker, `view` shows a file with line numbers, `search` finds text, `edit` changes a file, `malformed` sends
   a correction. Each result goes back into the conversation,
@@ -74,8 +76,9 @@ Plus [`system_prompt.txt`](system_prompt.txt) (the instructions the model gets),
    A reply without exactly one action block is **malformed**: nothing runs, the model is told so,
    the step still counts, and the bad reply is left out of the conversation so the model does not
    copy it.
-4. **Repeat** until `DONE` or 20 steps. The model always sees the system prompt, the bug report and
-   the last 10 messages, so the conversation never outgrows its 8,192-token context window.
+4. **Repeat** until `DONE` or 20 steps. The model always sees the system prompt, the bug report, the
+   last 10 messages, and the current content of the 2 files it viewed or edited most recently, read fresh
+   from disk. That stays well inside its 8,192-token context window.
 5. **Grade.** `grade.py` checks whether `tests/test_visible.py` or `pytest.ini` was changed
    (tampering). It then puts the original tests back, adds `tasks/<id>/hidden/test_hidden.py`, and
    runs both test files in Docker. An attempt **passes** only if both pass and nothing was

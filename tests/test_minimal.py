@@ -172,3 +172,14 @@ def test_edit_refuses_to_break_python_syntax(tmp_path):
 def test_steady_removes_run_to_run_noise():
     text = "==== 1 failed, 3 passed in 0.18s ====\nassert <Cache object at 0x7e9c8cac7620> == 3"
     assert utils.steady(text) == "==== 1 failed, 3 passed ====\nassert <Cache object at 0x...> == 3"
+
+
+def test_open_files_panel_shows_current_file_content(tmp_path, monkeypatch):
+    (tmp_path / "a.py").write_text("x = 1\n")
+    replies = iter([block("VIEW: a.py"), block("EDIT: a.py\n<<<<<<< OLD\nx = 1\n=======\nx = 2\n>>>>>>> NEW"), block("DONE")])
+    seen = []                                       # the messages the model received at each step
+    monkeypatch.setattr(agent, "ask_model", lambda messages, seed: seen.append(messages) or next(replies))
+    agent.run_agent("Fix the bug.", tmp_path, seed=1)
+    assert "Current content" not in seen[0][-1]["content"]              # nothing opened yet at step 1
+    assert "   1| x = 1" in seen[1][-1]["content"]                      # after VIEW: the file is shown
+    assert "   1| x = 2" in seen[2][-1]["content"]                      # after EDIT: the NEW content, fresh from disk

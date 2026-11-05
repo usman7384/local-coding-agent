@@ -17,7 +17,8 @@ import re
 import urllib.request
 from pathlib import Path
 
-from tools import TOOLS
+from tools import TOOLS, view
+from utils import project_file
 
 MODEL = os.environ.get("LLM_MODEL", "arh-qwen2.5-coder-7b-8k")
 URL = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1") + "/chat/completions"
@@ -25,6 +26,7 @@ SYSTEM_PROMPT = (Path(__file__).parent / "system_prompt.txt").read_text(encoding
 
 MAX_STEPS = 20        # the agent gets at most 20 model replies
 KEEP_MESSAGES = 10    # the model sees the system prompt, the bug report and only the last 10 messages
+OPEN_FILES = 2        # the files it viewed or edited most recently are always shown, fresh from disk
 
 
 def ask_model(messages: list[dict], seed: int) -> str:
@@ -45,16 +47,21 @@ def parse_action(reply: str) -> tuple[str, str]:
 
 def run_agent(bug_report: str, workdir: Path, seed: int) -> list[dict]:
     """Let the model work on `workdir` until it says DONE or runs out of steps. Returns the step-by-step trace."""
-    history, trace = [], []
+    history, trace, opened = [], [], []
     for step in range(1, MAX_STEPS + 1):
+        # "Open files" panel: the real, current content of the files being worked on, so nothing is edited from memory.
+        files = "\n\n".join(f"{name}\n{view(workdir, name)}" for name in opened)
+        panel = [{"role": "user", "content": f"Current content of the files you are working on:\n\n{files}"}] if opened else []
         messages = [{"role": "system", "content": SYSTEM_PROMPT},           # how to behave
-                    {"role": "user", "content": bug_report}] + history[-KEEP_MESSAGES:]  # the task + recent steps
+                    {"role": "user", "content": bug_report}] + history[-KEEP_MESSAGES:] + panel  # task, recent steps, files
         reply = ask_model(messages, seed=seed * 100 + step)                 # same seed -> same sampling
         kind, text = parse_action(reply)
         if kind == "DONE":
             return trace + [{"step": step, "reply": reply, "action": "DONE"}]
         result = TOOLS[kind](workdir, text)                                 # run the chosen tool
         trace.append({"step": step, "reply": reply, "action": kind, "result": result})
+        name = text.split()[0] if kind in ("VIEW", "EDIT") and text else ""     # the file this action touched
+        opened = ([f for f in opened if f != name] + [name])[-OPEN_FILES:] if project_file(workdir, name) else opened
         # Small models copy their own past replies, so a malformed one is not kept in the history.
         shown = reply if kind != "MALFORMED" else "(malformed reply removed)"
         history += [{"role": "assistant", "content": shown}, {"role": "user", "content": result}]
