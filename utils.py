@@ -135,3 +135,23 @@ def docstrings(test_source: str) -> dict[str, str]:
     """test name -> its docstring, for every test function in a test file."""
     return {f.name: ast.get_docstring(f) or "" for f in ast.parse(test_source).body
             if isinstance(f, ast.FunctionDef) and f.name.startswith("test_")}
+
+
+def fingerprint(output: str) -> str | None:
+    """The failing tests and their error lines in pytest output, or None if nothing failed."""
+    return "\n".join(sorted(set(re.findall(r"(?m)^(?:FAILED|ERROR|E ) .*", output)))) or None
+
+
+def stalls(trace: list[dict]) -> int:
+    """How many test runs in a trace failed exactly like the failing run before them: steps that made no progress."""
+    marks = [mark for s in trace if s["action"] == "BASH" and (mark := fingerprint(s["result"]))]
+    return sum(a == b for a, b in zip(marks, marks[1:]))
+
+
+def lesson(attempt: int, diff: str, check: str) -> str:
+    """A lesson from a failed try, for the next one: what it changed in src/, and how the visible tests still fail."""
+    change = (f"It changed src/ like this, and the files still contain that change:\n{shorten(diff, 800)}" if diff
+              else "It left src/ unchanged: its edits failed or were undone.")
+    return (f"\n\nLesson from failed try {attempt} (its conversation is gone): {change}\n"
+            f"The visible tests still fail with:\n{shorten(fingerprint(check) or check, 600)}\n"
+            "Do not repeat what it tried. Find the real cause and fix it.")

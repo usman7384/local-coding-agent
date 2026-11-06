@@ -58,7 +58,7 @@ def test_run_agent_with_a_fake_model(tmp_path, monkeypatch):
     ])
     monkeypatch.setattr(agent, "ask_model", lambda messages, seed: (next(replies), TOKENS))
     monkeypatch.setattr(tools.sandbox, "run", lambda workdir, command: (0, "1 passed"))
-    trace = agent.run_agent("Fix the bug.", tmp_path, seed=7)
+    trace = agent.run_agent("Fix the bug.", tmp_path, seed=7, original=tmp_path)   # verify passes: one try
     assert [s["action"] for s in trace] == ["MALFORMED", "BASH", "EDIT", "DONE"]
     assert (tmp_path / "a.py").read_text() == "x = 2\n"
 
@@ -180,7 +180,8 @@ def test_open_files_panel_shows_current_file_content(tmp_path, monkeypatch):
     replies = iter([block("VIEW: a.py"), block("EDIT: a.py\n<<<<<<< OLD\nx = 1\n=======\nx = 2\n>>>>>>> NEW"), block("DONE")])
     seen = []                                       # the messages the model received at each step
     monkeypatch.setattr(agent, "ask_model", lambda messages, seed: (seen.append(messages) or next(replies), TOKENS))
-    agent.run_agent("Fix the bug.", tmp_path, seed=1)
+    monkeypatch.setattr(tools.sandbox, "run", lambda workdir, command: (0, "1 passed"))  # verify passes
+    agent.run_agent("Fix the bug.", tmp_path, seed=1, original=tmp_path)
     assert "Current content" not in seen[0][-1]["content"]              # nothing opened yet at step 1
     assert "   1| x = 1" in seen[1][-1]["content"]                      # after VIEW: the file is shown
     assert "   1| x = 2" in seen[2][-1]["content"]                      # after EDIT: the NEW content, fresh from disk
@@ -199,3 +200,30 @@ def test_functions_and_docstrings_find_what_make_tasks_needs():
     source = "def f(x):\n    return x\n\n\nclass C:\n    def g(self):\n        pass\n"
     assert utils.functions(source) == [("f", 1, 2), ("C.g", 6, 7)]                 # methods are named Class.method
     assert utils.docstrings('def test_a():\n    """A works."""\n\n\ndef helper():\n    pass\n') == {"test_a": "A works."}
+
+
+def test_verify_retries_once_with_a_lesson_when_the_visible_tests_fail(tmp_path, monkeypatch):
+    original, work = tmp_path / "original", tmp_path / "work"
+    for folder in (original, work / "src"):
+        folder.mkdir(parents=True)
+        (folder / "a.py").write_text("x = 1\n")
+    replies = iter([block("EDIT: src/a.py\n<<<<<<< OLD\nx = 1\n=======\nx = 2\n>>>>>>> NEW"), block("DONE"), block("DONE")])
+    seen = []                                       # (messages, seed) of every model call
+    monkeypatch.setattr(agent, "ask_model", lambda messages, seed: (seen.append((messages, seed)) or next(replies), TOKENS))
+    failing = "F\nE   assert 2 == 3\nFAILED tests/test_visible.py::test_a - assert 2 == 3\n1 failed"
+    monkeypatch.setattr(tools.sandbox, "run", lambda workdir, command: (1, failing))      # the visible tests fail
+    trace = agent.run_agent("Fix it.", work, seed=1, original=original)
+    assert [s["action"] for s in trace] == ["EDIT", "DONE", "RETRY", "DONE"]        # one retry, then no tries left
+    messages, seed = seen[2]                        # the first call of the second try
+    assert len(messages) == 2                       # a fresh conversation: system prompt and bug report only
+    assert "Lesson from failed try 1" in messages[1]["content"] and "+x = 2" in messages[1]["content"]
+    assert "E   assert 2 == 3" in messages[1]["content"]
+    assert seed == 104                              # steps keep counting, so the second try samples differently
+
+
+def test_stalls_count_test_runs_that_fail_exactly_like_the_last_failing_run():
+    failing = "F\nE   assert 1 == 2\nFAILED tests/test_visible.py::test_a - assert 1 == 2\n1 failed"
+    trace = [{"action": "BASH", "result": failing}, {"action": "BASH", "result": "a.py"},  # ls in between is ignored
+             {"action": "BASH", "result": failing}, {"action": "EDIT", "result": "EDIT applied"}]
+    assert utils.stalls(trace) == 1
+    assert utils.fingerprint("3 passed") is None

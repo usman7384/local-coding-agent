@@ -24,9 +24,10 @@ The same agent drawn the way LangGraph draws agents: **nodes** are steps, **soli
   with line numbers, at the end of every prompt, so the model edits the real code, not its memory of it.
 - The reply's action picks the next node through the `TOOLS` dict in `tools.py`: `bash` runs a command in
   Docker, `view` shows a file with line numbers, `search` finds text, `edit` changes a file, `malformed` sends
-  a correction. Each result goes back into the conversation,
-  and the loop repeats.
-- `DONE`, or running out of 20 steps, leads to `grade` (`grade.py`) and the end.
+  a correction. Each result goes back into the conversation, and the loop repeats.
+- `DONE`, or running out of 20 steps, leads to `verify`: the harness runs the visible tests itself. If they
+  fail, the agent gets **one retry**: a fresh conversation whose bug report carries a lesson (what the failed
+  try changed in `src/` and how the tests still fail). Otherwise, and after the retry, `grade` (`grade.py`).
 
 Where it is going: the planned graph. Every node is tagged with the stage that adds it.
 
@@ -39,13 +40,13 @@ Read them in this order:
 | File | Lines | What it does |
 |---|---|---|
 | [`sandbox.py`](sandbox.py) | 26 | Runs one shell command in a fresh Docker container that sees only the task's folder: no network, 1 CPU, 768 MB, non-root, 30-second limit |
-| [`agent.py`](agent.py) | 72 | The agent loop: send the conversation to the model, read **one** action from its reply, run the matching tool, add the result, repeat (max 20 steps) |
-| [`tools.py`](tools.py) | 77 | The agent's tools (`bash`, `view`, `search`, `edit`) and the `TOOLS` dict that maps each action name to one. Adding a tool = one function + one dict line |
+| [`agent.py`](agent.py) | 88 | The agent loop: send the conversation to the model, read **one** action from its reply, run the matching tool, add the result, repeat (max 20 steps). Then verify with the visible tests, and retry once with a lesson if they fail |
+| [`tools.py`](tools.py) | 82 | The agent's tools (`bash`, `view`, `search`, `edit`) and the `TOOLS` dict that maps each action name to one. Adding a tool = one function + one dict line |
 | [`grade.py`](grade.py) | 27 | After the agent stops: check the tests were not edited, then run the visible tests and the hidden tests |
-| [`run.py`](run.py) | 68 | Runs every task 5 times and writes one line per attempt to `results/<run>/results.jsonl`, plus a step-by-step trace. Each line also records tokens, the git commit, the model digest and the Ollama version |
-| [`report.py`](report.py) | 45 | Prints how often each task passed, pass@1, pass-all, why attempts failed, how many edits applied, tokens per attempt and per success, and pass@1 on the held-out tasks |
+| [`run.py`](run.py) | 70 | Runs every task 3 times and writes one line per attempt to `results/<run>/results.jsonl`, plus a step-by-step trace. Each line also records tokens, the git commit, the model digest and the Ollama version |
+| [`report.py`](report.py) | 51 | Prints how often each task passed, pass@1, pass-all, why attempts failed, how many got a retry, how often the tests failed exactly as before (stalls), how many edits applied, tokens per attempt and per success, and pass@1 on the held-out tasks |
 | [`stats.py`](stats.py) | 44 | Is a result real? pass@k vs pass^k, a 95% confidence interval, the run-to-run noise band, and a verdict when comparing two runs |
-| [`utils.py`](utils.py) | 137 | Small helpers that keep the files above short: shorten output, fix indentation, diff folders, JSON lines, pass@k / pass^k maths, bootstrap, provenance, finding functions and test docstrings |
+| [`utils.py`](utils.py) | 157 | Small helpers that keep the files above short: shorten output, fix indentation, diff folders, JSON lines, pass@k / pass^k maths, bootstrap, provenance, finding functions and test docstrings, the stall fingerprint, the retry lesson |
 | [`make_tasks.py`](make_tasks.py) | 147 | Makes the tasks: breaks one line of a correct project in `corpus/` and keeps the bug only if the tests catch it |
 
 Plus [`system_prompt.txt`](system_prompt.txt) (the instructions the model gets), [`tasks/`](tasks/)
@@ -88,12 +89,14 @@ one call away, D3 = two bugs in two files. It is plain mutation testing: no mode
 4. **Repeat** until `DONE` or 20 steps. The model always sees the system prompt, the bug report, the
    last 10 messages, and the current content of the 2 files it viewed or edited most recently, read fresh
    from disk. That stays well inside its 8,192-token context window.
+   **Verify:** the harness then runs the visible tests itself. If they fail, the agent gets one more try
+   of 20 steps with a fresh conversation, whose bug report carries a lesson from the failed try.
 5. **Grade.** `grade.py` checks whether `tests/test_visible.py` or `pytest.ini` was changed
    (tampering). It then puts the original tests back, adds `tasks/<id>/hidden/test_hidden.py`, and
    runs both test files in Docker. An attempt **passes** only if both pass and nothing was
    tampered with. Saying `DONE` proves nothing.
 6. **Record.** One JSON line per attempt: passed or not, the outcome (`passed`, `wrong_fix`,
-   `ran_out_of_steps`, `tampered`), steps, malformed replies, seconds, the seed, and the diff of what
+   `ran_out_of_steps`, `tampered`), steps, tries, malformed replies, seconds, the seed, and the diff of what
    the agent changed.
 
 **Seeds.** The model picks words with some randomness (temperature 0.7), which is why repeats

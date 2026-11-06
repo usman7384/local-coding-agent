@@ -8,7 +8,8 @@ for example:
     VIEW: src/ringlog.py
     ```
 
-and finishes with a block containing only DONE.
+and finishes with a block containing only DONE. The harness then runs the visible tests itself (verify); if they
+fail, the agent gets one more try with a fresh conversation and a lesson from the failed one.
 """
 
 import json
@@ -17,15 +18,17 @@ import re
 import urllib.request
 from pathlib import Path
 
-from tools import TOOLS, view
-from utils import project_file
+from grade import PYTEST
+from tools import TOOLS, bash, view
+from utils import diff_dirs, lesson, project_file
 
 MODEL = os.environ.get("LLM_MODEL", "arh-qwen2.5-coder-7b-8k")
 SERVER = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")
 URL = SERVER + "/chat/completions"
 SYSTEM_PROMPT = (Path(__file__).parent / "system_prompt.txt").read_text(encoding="utf-8")
 
-MAX_STEPS = 20        # the agent gets at most 20 model replies
+MAX_STEPS = 20        # each try gets at most 20 model replies
+TRIES = 2             # verify: if the visible tests fail after a try, one more try with a lesson
 KEEP_MESSAGES = 10    # the model sees the system prompt, the bug report and only the last 10 messages
 OPEN_FILES = 2        # the files it viewed or edited most recently are always shown, fresh from disk
 
@@ -49,10 +52,23 @@ def parse_action(reply: str) -> tuple[str, str]:
     return kind, text.strip()
 
 
-def run_agent(bug_report: str, workdir: Path, seed: int) -> list[dict]:
+def run_agent(bug_report: str, workdir: Path, seed: int, original: Path) -> list[dict]:
+    """Up to TRIES tries at the bug. After each, verify with the visible tests; if they fail, start a fresh
+    conversation whose bug report carries a lesson: what the failed try changed and how the tests still fail."""
+    trace, lessons = [], ""
+    for attempt in range(1, TRIES + 1):
+        trace += one_try(bug_report + lessons, workdir, seed, first=len(trace) + 1)
+        check = bash(workdir, PYTEST + "tests/test_visible.py")            # verify: do not take DONE on trust
+        if check.startswith("exit code 0") or attempt == TRIES:
+            return trace
+        lessons += lesson(attempt, diff_dirs(original, workdir / "src"), check)  # kept; the old conversation is not
+        trace.append({"step": len(trace) + 1, "action": "RETRY", "result": lessons, "tokens_in": 0, "tokens_out": 0})
+
+
+def one_try(bug_report: str, workdir: Path, seed: int, first: int) -> list[dict]:
     """Let the model work on `workdir` until it says DONE or runs out of steps. Returns the step-by-step trace."""
     history, trace, opened = [], [], []
-    for step in range(1, MAX_STEPS + 1):
+    for step in range(first, first + MAX_STEPS):
         # "Open files" panel: the real, current content of the files being worked on, so nothing is edited from memory.
         files = "\n\n".join(f"{name}\n{view(workdir, name)}" for name in opened)
         panel = [{"role": "user", "content": f"Current content of the files you are working on:\n\n{files}"}] if opened else []

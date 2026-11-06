@@ -50,17 +50,19 @@ for repeat in range(args.repeats):          # all tasks once, then all tasks aga
         start = time.time()
 
         docker_ok()                                                # never blame the agent for a broken Docker
-        trace = run_agent((task / "prompt.txt").read_text(encoding="utf-8"), workdir, seed)
+        trace = run_agent((task / "prompt.txt").read_text(encoding="utf-8"), workdir, seed, task / "repo" / "src")
         diff = diff_dirs(task / "repo" / "src", workdir / "src")    # what the agent changed
         result = grade(task, workdir)
         shutil.rmtree(workdir, ignore_errors=True)
         docker_ok()                                                # still working? otherwise this attempt is not saved
 
-        said_done = bool(trace) and trace[-1]["action"] == "DONE"
+        said_done = bool(trace) and trace[-1]["action"] == "DONE"            # how the last try ended
         outcome = ("passed" if result["passed"] else "tampered" if result["tampered"]
                    else "wrong_fix" if said_done else "ran_out_of_steps")
+        retries = sum(s["action"] == "RETRY" for s in trace)                 # tries after a failed verify
         record = {"task": task.name, "repeat": repeat, "seed": seed, **result, "outcome": outcome,
-                  "steps": len(trace), "malformed": sum(s["action"] == "MALFORMED" for s in trace),
+                  "steps": len(trace) - retries, "tries": 1 + retries,
+                  "malformed": sum(s["action"] == "MALFORMED" for s in trace),
                   "tokens_in": sum(s["tokens_in"] for s in trace), "tokens_out": sum(s["tokens_out"] for s in trace),
                   "seconds": round(time.time() - start, 1), **stamp, "diff": diff}
         (out / "traces" / f"{task.name}__r{repeat}.json").write_text(json.dumps(trace, indent=1), encoding="utf-8")
