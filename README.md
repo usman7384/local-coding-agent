@@ -45,6 +45,7 @@ Read them in this order:
 | [`grade.py`](grade.py) | 27 | After the agent stops: check the tests were not edited, then run the visible tests and the hidden tests |
 | [`run.py`](run.py) | 70 | Runs every task 3 times and writes one line per attempt to `results/<run>/results.jsonl`, plus a step-by-step trace. Each line also records tokens, the git commit, the model digest and the Ollama version |
 | [`report.py`](report.py) | 51 | Prints how often each task passed, pass@1, pass-all, why attempts failed, how many got a retry, how often the tests failed exactly as before (stalls), how many edits applied, tokens per attempt and per success, and pass@1 on the held-out tasks |
+| [`bestofn.py`](bestofn.py) | 31 | Best-of-N from a run's repeats: keep the first attempt whose visible tests pass, for N = 1, 2, 3, with tokens per task |
 | [`stats.py`](stats.py) | 44 | Is a result real? pass@k vs pass^k, a 95% confidence interval, the run-to-run noise band, and a verdict when comparing two runs |
 | [`utils.py`](utils.py) | 157 | Small helpers that keep the files above short: shorten output, fix indentation, diff folders, JSON lines, pass@k / pass^k maths, bootstrap, provenance, finding functions and test docstrings, the stall fingerprint, the retry lesson |
 | [`make_tasks.py`](make_tasks.py) | 147 | Makes the tasks: breaks one line of a correct project in `corpus/` and keeps the bug only if the tests catch it |
@@ -121,6 +122,7 @@ python run.py --run-id baseline
 python report.py results/baseline
 python stats.py results/baseline                      # CI, pass^k, noise band
 python stats.py results/baseline results/my-change    # is a change real or luck?
+python bestofn.py results/baseline                     # success vs compute, best-of-N
 ```
 
 Quick try: `python run.py --run-id smoke --repeats 1 --tasks ringlog-d1,workdays-d1`.
