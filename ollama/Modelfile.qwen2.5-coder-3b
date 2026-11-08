@@ -1,0 +1,5 @@
+# Stage 6: the same family as the main model, at 3B instead of 7B. Pins an 8k context like ollama/Modelfile.
+# Create with:  ollama create arh-qwen2.5-coder-3b-8k -f ollama/Modelfile.qwen2.5-coder-3b
+FROM qwen2.5-coder:3b-instruct-q4_K_M
+PARAMETER num_ctx 8192
+PARAMETER num_gpu 99

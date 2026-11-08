@@ -39,13 +39,13 @@ Read them in this order:
 
 | File | Lines | What it does |
 |---|---|---|
-| [`sandbox.py`](sandbox.py) | 26 | Runs one shell command in a fresh Docker container that sees only the task's folder: no network, 1 CPU, 768 MB, non-root, 30-second limit |
+| [`sandbox.py`](sandbox.py) | 30 | Runs one shell command in a fresh Docker container that sees only the task's folder, with `tests/` and `pytest.ini` read-only: no network, 1 CPU, 768 MB, non-root, 30-second limit |
 | [`agent.py`](agent.py) | 88 | The agent loop: send the conversation to the model, read **one** action from its reply, run the matching tool, add the result, repeat (max 20 steps). Then verify with the visible tests, and retry once with a lesson if they fail |
-| [`tools.py`](tools.py) | 82 | The agent's tools (`bash`, `view`, `search`, `edit`) and the `TOOLS` dict that maps each action name to one. Adding a tool = one function + one dict line |
+| [`tools.py`](tools.py) | 84 | The agent's tools (`bash`, `view`, `search`, `edit`) and the `TOOLS` dict that maps each action name to one. Adding a tool = one function + one dict line |
 | [`grade.py`](grade.py) | 27 | After the agent stops: check the tests were not edited, then run the visible tests and the hidden tests |
 | [`run.py`](run.py) | 70 | Runs every task 3 times and writes one line per attempt to `results/<run>/results.jsonl`, plus a step-by-step trace. Each line also records tokens, the git commit, the model digest and the Ollama version |
 | [`report.py`](report.py) | 51 | Prints how often each task passed, pass@1, pass-all, why attempts failed, how many got a retry, how often the tests failed exactly as before (stalls), how many edits applied, tokens per attempt and per success, and pass@1 on the held-out tasks |
-| [`bestofn.py`](bestofn.py) | 31 | Best-of-N from a run's repeats: keep the first attempt whose visible tests pass, for N = 1, 2, 3, with tokens per task |
+| [`bestofn.py`](bestofn.py) | 30 | Best-of-N from a run's repeats: keep the first attempt whose visible tests pass, for N = 1, 2, 3, with tokens per task |
 | [`stats.py`](stats.py) | 44 | Is a result real? pass@k vs pass^k, a 95% confidence interval, the run-to-run noise band, and a verdict when comparing two runs |
 | [`utils.py`](utils.py) | 157 | Small helpers that keep the files above short: shorten output, fix indentation, diff folders, JSON lines, pass@k / pass^k maths, bootstrap, provenance, finding functions and test docstrings, the stall fingerprint, the retry lesson |
 | [`make_tasks.py`](make_tasks.py) | 147 | Makes the tasks: breaks one line of a correct project in `corpus/` and keeps the bug only if the tests catch it |
@@ -81,7 +81,7 @@ one call away, D3 = two bugs in two files. It is plain mutation testing: no mode
    | `BASH: <command>` | `sandbox.py` runs it in Docker against the temp folder. The exit code and output, shortened to 3,000 characters (enough for every task file), go back to the model |
    | `VIEW: <file>` or `VIEW: <file> 10-30` | `tools.py` shows the file, or some lines of it, with line numbers |
    | `SEARCH: <text>` | `tools.py` lists every line containing the text in the project's `.py` files, as `file:line: code` |
-   | `EDIT: <file>` with `<<<<<<< OLD` / `=======` / `>>>>>>> NEW` | `tools.py` replaces the OLD text with the NEW text in the temp folder. OLD must appear exactly once; wrong indentation and line numbers copied from VIEW are tolerated; an edit that would break Python syntax is refused and nothing is saved |
+   | `EDIT: <file>` with `<<<<<<< OLD` / `=======` / `>>>>>>> NEW` | `tools.py` replaces the OLD text with the NEW text in the temp folder. OLD must appear exactly once; wrong indentation and line numbers copied from VIEW are tolerated; an edit that would break Python syntax, or that targets `tests/` or `pytest.ini`, is refused and nothing is saved |
    | `DONE` | The agent stops |
 
    A reply without exactly one action block is **malformed**: nothing runs, the model is told so,
@@ -93,7 +93,7 @@ one call away, D3 = two bugs in two files. It is plain mutation testing: no mode
    **Verify:** the harness then runs the visible tests itself. If they fail, the agent gets one more try
    of 20 steps with a fresh conversation, whose bug report carries a lesson from the failed try.
 5. **Grade.** `grade.py` checks whether `tests/test_visible.py` or `pytest.ini` was changed
-   (tampering). It then puts the original tests back, adds `tasks/<id>/hidden/test_hidden.py`, and
+   (tampering; the tests are mounted read-only, so this should never happen). It then puts the original tests back, adds `tasks/<id>/hidden/test_hidden.py`, and
    runs both test files in Docker. An attempt **passes** only if both pass and nothing was
    tampered with. Saying `DONE` proves nothing.
 6. **Record.** One JSON line per attempt: passed or not, the outcome (`passed`, `wrong_fix`,

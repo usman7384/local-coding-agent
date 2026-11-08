@@ -55,6 +55,8 @@ def edit(workdir: Path, text: str) -> str:
     if not match:
         return "EDIT failed: write the file name, then <<<<<<< OLD, =======, >>>>>>> NEW lines."
     name, old, new = match.groups()
+    if name.split("/")[0] in sandbox.READ_ONLY:                              # guardrail: tests are read-only
+        return f"EDIT refused: {name} is read-only. The tests define the expected behavior; fix the code in src/."
     old, new = (re.sub(r"(?m)^ *\d+\| ?", "", part) for part in (old, new))  # drop "  35| " copied from VIEW
     file = project_file(workdir, name)
     if not file:

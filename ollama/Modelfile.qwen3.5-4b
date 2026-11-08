@@ -1,0 +1,8 @@
+# Stage 6: a newer model generation at 4B. Pins an 8k context like ollama/Modelfile.
+# presence_penalty is 0 (the library default is 1.5): a penalty on repeated tokens works against EDIT, whose
+# OLD text must be copied exactly. Temperature and top_p are sent by the harness with every request.
+# Create with:  ollama create arh-qwen3.5-4b-8k -f ollama/Modelfile.qwen3.5-4b
+FROM qwen3.5:4b
+PARAMETER num_ctx 8192
+PARAMETER num_gpu 99
+PARAMETER presence_penalty 0

@@ -227,3 +227,20 @@ def test_stalls_count_test_runs_that_fail_exactly_like_the_last_failing_run():
              {"action": "BASH", "result": failing}, {"action": "EDIT", "result": "EDIT applied"}]
     assert utils.stalls(trace) == 1
     assert utils.fingerprint("3 passed") is None
+
+
+def test_edit_refuses_to_change_the_tests(tmp_path):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_visible.py").write_text("assert 1 == 2\n")
+    result = tools.edit(tmp_path, "tests/test_visible.py\n<<<<<<< OLD\nassert 1 == 2\n=======\nassert 1 == 1\n>>>>>>> NEW")
+    assert result.startswith("EDIT refused") and (tmp_path / "tests" / "test_visible.py").read_text() == "assert 1 == 2\n"
+
+
+@needs_docker
+def test_bash_cannot_change_the_tests(tmp_path):
+    workdir = fresh_copy(tmp_path)
+    before = (workdir / "tests" / "test_visible.py").read_text()
+    code, _ = tools.sandbox.run(workdir, "echo 'def test_ok(): pass' > tests/test_visible.py; touch tests/test_new.py")
+    assert code != 0 and (workdir / "tests" / "test_visible.py").read_text() == before
+    assert sorted(p.name for p in (workdir / "tests").glob("*.py")) == ["test_visible.py"]
+    assert tools.sandbox.run(workdir, "echo ok > src/scratch.txt")[0] == 0            # src/ stays writable
