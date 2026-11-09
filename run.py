@@ -16,7 +16,7 @@ import zlib
 from pathlib import Path
 
 import sandbox
-from agent import MODEL, SERVER, run_agent
+from agent import MAX_TOKENS, MODEL, SERVER, THINK, run_agent
 from grade import grade
 from utils import append_jsonl, diff_dirs, provenance, read_jsonl
 
@@ -32,9 +32,10 @@ out = Path("results") / args.run_id
 (out / "traces").mkdir(parents=True, exist_ok=True)
 rows = read_jsonl(out / "results.jsonl")
 finished = {(row["task"], row["repeat"]) for row in rows}           # for resuming
-stamp = provenance(MODEL, SERVER)                                    # commit, model digest, Ollama version
+stamp = {**provenance(MODEL, SERVER), "think": THINK, "max_tokens": MAX_TOKENS}  # commit, model digest, Ollama, ...
 # Resuming with other code or another model would mix two experiments in one run.
-changed = sorted({key for row in rows for key in ("commit", "model_digest") if row.get(key, stamp[key]) != stamp[key]})
+keys = ("commit", "model_digest", "think", "max_tokens")
+changed = sorted({key for row in rows for key in keys if row.get(key, stamp[key]) != stamp[key]})
 if changed:
     sys.exit(f"This run was started with a different {' and '.join(changed)}. Use a new --run-id.")
 # If Docker cannot start a container, stop the whole run: a crashed sandbox would look like a failed attempt.

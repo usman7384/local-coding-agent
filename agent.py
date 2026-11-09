@@ -22,10 +22,14 @@ from grade import PYTEST
 from tools import TOOLS, bash, view
 from utils import diff_dirs, lesson, project_file
 
-MODEL = os.environ.get("LLM_MODEL", "arh-qwen2.5-coder-7b-8k")
+MODEL = os.environ.get("LLM_MODEL", "arh-qwen3.5-4b-8k")             # Stage 6: replaced qwen2.5-coder 7B
 SERVER = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")
 URL = SERVER + "/chat/completions"
 SYSTEM_PROMPT = (Path(__file__).parent / "system_prompt.txt").read_text(encoding="utf-8")
+# Reasoning models think before they answer. LLM_THINK="none" (the default) turns that off, and models that do not
+# think ignore it; "" sends nothing. Thinking tokens count against MAX_TOKENS, so a thinking run needs a larger one.
+THINK = os.environ.get("LLM_THINK", "none")
+MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "768"))
 
 MAX_STEPS = 20        # each try gets at most 20 model replies
 TRIES = 2             # verify: if the visible tests fail after a try, one more try with a lesson
@@ -35,12 +39,13 @@ OPEN_FILES = 2        # the files it viewed or edited most recently are always s
 
 def ask_model(messages: list[dict], seed: int) -> tuple[str, dict]:
     """One call to the local model through its OpenAI-compatible chat API. Returns the reply and its token counts."""
-    body = {"model": MODEL, "messages": messages, "seed": seed, "temperature": 0.7, "top_p": 0.9, "max_tokens": 768}
+    body = {"model": MODEL, "messages": messages, "seed": seed, "temperature": 0.7, "top_p": 0.9,
+            "max_tokens": MAX_TOKENS, **({"reasoning_effort": THINK} if THINK else {})}  # thinking: only when set
     request = urllib.request.Request(URL, json.dumps(body).encode(), {"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=600) as response:
         answer = json.load(response)
     usage = answer["usage"]                                             # tokens read and written by this call
-    return answer["choices"][0]["message"]["content"], {"tokens_in": usage["prompt_tokens"],
+    return answer["choices"][0]["message"]["content"] or "", {"tokens_in": usage["prompt_tokens"],
                                                         "tokens_out": usage["completion_tokens"]}
 
 

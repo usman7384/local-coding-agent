@@ -19,7 +19,8 @@ The same agent drawn the way LangGraph draws agents: **nodes** are steps, **soli
 ![Current agent graph](docs/graph-current.png)
 
 - `setup` copies the buggy project into a temp folder and reads the bug report (`run.py`).
-- `call_model` sends the conversation to the local LLM and gets one reply (`agent.ask_model`).
+- `call_model` sends the conversation to the local LLM and gets one reply (`agent.ask_model`), with or without
+  thinking for a reasoning model (`LLM_THINK`).
 - `open files` re-reads the (at most 2) files the agent viewed or edited most recently and shows them,
   with line numbers, at the end of every prompt, so the model edits the real code, not its memory of it.
 - The reply's action picks the next node through the `TOOLS` dict in `tools.py`: `bash` runs a command in
@@ -40,10 +41,10 @@ Read them in this order:
 | File | Lines | What it does |
 |---|---|---|
 | [`sandbox.py`](sandbox.py) | 30 | Runs one shell command in a fresh Docker container that sees only the task's folder, with `tests/` and `pytest.ini` read-only: no network, 1 CPU, 768 MB, non-root, 30-second limit |
-| [`agent.py`](agent.py) | 88 | The agent loop: send the conversation to the model, read **one** action from its reply, run the matching tool, add the result, repeat (max 20 steps). Then verify with the visible tests, and retry once with a lesson if they fail |
+| [`agent.py`](agent.py) | 93 | The agent loop: send the conversation to the model, read **one** action from its reply, run the matching tool, add the result, repeat (max 20 steps). Then verify with the visible tests, and retry once with a lesson if they fail |
 | [`tools.py`](tools.py) | 84 | The agent's tools (`bash`, `view`, `search`, `edit`) and the `TOOLS` dict that maps each action name to one. Adding a tool = one function + one dict line |
 | [`grade.py`](grade.py) | 27 | After the agent stops: check the tests were not edited, then run the visible tests and the hidden tests |
-| [`run.py`](run.py) | 70 | Runs every task 3 times and writes one line per attempt to `results/<run>/results.jsonl`, plus a step-by-step trace. Each line also records tokens, the git commit, the model digest and the Ollama version |
+| [`run.py`](run.py) | 71 | Runs every task 3 times and writes one line per attempt to `results/<run>/results.jsonl`, plus a step-by-step trace. Each line also records tokens, the git commit, the model digest, the Ollama version and the thinking settings |
 | [`report.py`](report.py) | 51 | Prints how often each task passed, pass@1, pass-all, why attempts failed, how many got a retry, how often the tests failed exactly as before (stalls), how many edits applied, tokens per attempt and per success, and pass@1 on the held-out tasks |
 | [`bestofn.py`](bestofn.py) | 30 | Best-of-N from a run's repeats: keep the first attempt whose visible tests pass, for N = 1, 2, 3, with tokens per task |
 | [`stats.py`](stats.py) | 44 | Is a result real? pass@k vs pass^k, a 95% confidence interval, the run-to-run noise band, and a verdict when comparing two runs |
@@ -107,9 +108,9 @@ re-sampled the same way.
 ## Run it
 
 ```bash
-# 1. a local model (Ollama): a 7B coding model, 4-bit, pinned to an 8k context window
-ollama pull qwen2.5-coder:7b-instruct-q4_K_M
-ollama create arh-qwen2.5-coder-7b-8k -f ollama/Modelfile
+# 1. a local model (Ollama): qwen3.5 4B, 4-bit, pinned to an 8k context window (ollama/ has other Modelfiles)
+ollama pull qwen3.5:4b
+ollama create arh-qwen3.5-4b-8k -f ollama/Modelfile.qwen3.5-4b
 
 # 2. the sandbox image (Python 3.12 + pytest, non-root user)
 docker build -t agent-reliability-sandbox:1 docker/
@@ -130,6 +131,8 @@ Interrupted runs resume where they stopped, but only with the same commit and mo
 changed, `run.py` stops and asks for a new `--run-id`, so one run never mixes two experiments. Point it at
 another model with `LLM_MODEL` and `LLM_BASE_URL` (any OpenAI-compatible server; the model digest and server
 version are read from Ollama and recorded as "unknown" elsewhere).
+For a reasoning model, `LLM_THINK` is sent as `reasoning_effort` (`none`, the default, turns thinking off) and `LLM_MAX_TOKENS`
+raises the reply limit (768), since thinking tokens count against it. Both are recorded in every result line.
 
 ## What this measures
 
