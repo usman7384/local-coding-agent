@@ -131,6 +131,13 @@ def functions(source: str) -> list[tuple[str, int, int]]:
     return found
 
 
+def local_names(lines: list[str]) -> list[str]:
+    """The parameters (except self) and assigned names of one function (its def line first), for wrong-variable bugs."""
+    params = re.findall(r"[(,]\s*\*{0,2}(\w+)", lines[0].split("->")[0])
+    assigned = [m for line in lines[1:] for m in re.findall(r"^\s*(\w+)\s*[-+*/]?=(?!=)|\bfor (\w+) in", line)]
+    return sorted({n for n in params + [a or b for a, b in assigned] if n not in ("self", "cls", "_")})
+
+
 def docstrings(test_source: str) -> dict[str, str]:
     """test name -> its docstring, for every test function in a test file."""
     return {f.name: ast.get_docstring(f) or "" for f in ast.parse(test_source).body

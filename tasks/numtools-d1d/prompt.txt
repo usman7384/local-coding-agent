@@ -1,0 +1,10 @@
+Bug report
+
+Something in this small Python project is broken. Behavior that users rely on no longer works as documented:
+
+  Expected: Rounding 7 to the nearest multiple of 5 should give 5, and 8 should give 10.
+
+Right now the project does not meet these expectations. Find the bug in the source code under src/ and fix it. Do not modify the tests.
+
+Reproduce with:
+  python -m pytest -q tests/test_visible.py

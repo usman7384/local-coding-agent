@@ -1,0 +1,14 @@
+{
+  "name": "wallet",
+  "family": "stateful_class",
+  "files": ["history.py", "account.py", "bank.py"],
+  "entries": {"Account.deposit": "account.py", "Account.withdraw": "account.py", "Bank.open": "bank.py", "Bank.transfer": "bank.py", "Bank.apply_fees": "bank.py", "Bank.statement": "bank.py"},
+  "helpers": {
+    "History.add": {"file": "history.py", "caller": "Account.deposit", "hops": 1},
+    "History.balance": {"file": "history.py", "caller": "Account.balance", "hops": 1},
+    "History.last": {"file": "history.py", "caller": "Bank.statement", "hops": 1},
+    "Account.available": {"file": "account.py", "caller": "Account.withdraw", "hops": 1},
+    "Account.check_open": {"file": "account.py", "caller": "Bank.transfer", "hops": 2},
+    "Bank.get": {"file": "bank.py", "caller": "Bank.transfer", "hops": 1}
+  }
+}

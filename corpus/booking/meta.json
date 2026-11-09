@@ -1,0 +1,16 @@
+{
+  "name": "booking",
+  "family": "stateful_class",
+  "files": ["slots.py", "rooms.py", "planner.py"],
+  "entries": {"Planner.book": "planner.py", "Planner.free_slots": "planner.py", "Planner.cancel": "planner.py", "Planner.utilisation": "planner.py", "merge": "slots.py", "parse_time": "slots.py"},
+  "helpers": {
+    "Planner.find": {"file": "planner.py", "caller": "Planner.free_slots", "hops": 1},
+    "Room.is_free": {"file": "rooms.py", "caller": "Planner.book", "hops": 1},
+    "Room.book": {"file": "rooms.py", "caller": "Planner.book", "hops": 1},
+    "Room.cancel": {"file": "rooms.py", "caller": "Planner.cancel", "hops": 1},
+    "Room.busy": {"file": "rooms.py", "caller": "Planner.free_slots", "hops": 1},
+    "Room.booked_minutes": {"file": "rooms.py", "caller": "Planner.utilisation", "hops": 1},
+    "gaps": {"file": "slots.py", "caller": "Planner.free_slots", "hops": 1},
+    "overlaps": {"file": "slots.py", "caller": "Room.is_free", "hops": 2}
+  }
+}

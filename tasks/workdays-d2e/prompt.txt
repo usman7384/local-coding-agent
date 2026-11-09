@@ -1,0 +1,12 @@
+Bug report
+
+Something in this small Python project is broken. Behavior that users rely on no longer works as documented:
+
+  Expected: One business day after Friday 2024-03-08 should be Monday 2024-03-11.
+  Expected: From Monday 2024-03-04 up to (not including) the next Monday there should be 5 business days.
+  Expected: If Tuesday 2024-03-12 is a holiday, two business days after Monday 2024-03-11 should be Thursday 2024-03-14.
+
+Right now the project does not meet these expectations. Find the bug in the source code under src/ and fix it. Do not modify the tests.
+
+Reproduce with:
+  python -m pytest -q tests/test_visible.py

@@ -2,6 +2,7 @@
 
     python run.py --run-id baseline --repeats 3
     python run.py --run-id smoke --repeats 1 --tasks ringlog-d1,timespan-d1
+    python run.py --run-id my-change --tasks tasks/bench-45.txt     # only the first 45 tasks
 
 Finished attempts are skipped, so an interrupted run can simply be started again.
 """
@@ -23,11 +24,12 @@ from utils import append_jsonl, diff_dirs, provenance, read_jsonl
 parser = argparse.ArgumentParser()
 parser.add_argument("--run-id", default="baseline")
 parser.add_argument("--repeats", type=int, default=3)
-parser.add_argument("--tasks", help="comma-separated task ids (default: all)")
+parser.add_argument("--tasks", help="comma-separated task ids, or a .txt file listing them (default: all)")
 args = parser.parse_args()
 
 tasks = sorted(p for p in Path("tasks").iterdir() if (p / "prompt.txt").exists())
-tasks = [t for t in tasks if not args.tasks or t.name in args.tasks.split(",")]
+wanted = Path(args.tasks).read_text().split() if str(args.tasks).endswith(".txt") else str(args.tasks).split(",")
+tasks = [t for t in tasks if not args.tasks or t.name in wanted]
 out = Path("results") / args.run_id
 (out / "traces").mkdir(parents=True, exist_ok=True)
 rows = read_jsonl(out / "results.jsonl")

@@ -1,0 +1,10 @@
+Bug report
+
+Something in this small Python project is broken. Behavior that users rely on no longer works as documented:
+
+  Expected: Local parcels of 1000 g and 2500 g cost 600 and 900 cents, so 1500 cents together.
+
+Right now the project does not meet these expectations. Find the bug in the source code under src/ and fix it. Do not modify the tests.
+
+Reproduce with:
+  python -m pytest -q tests/test_visible.py

@@ -200,6 +200,9 @@ def test_functions_and_docstrings_find_what_make_tasks_needs():
     source = "def f(x):\n    return x\n\n\nclass C:\n    def g(self):\n        pass\n"
     assert utils.functions(source) == [("f", 1, 2), ("C.g", 6, 7)]                 # methods are named Class.method
     assert utils.docstrings('def test_a():\n    """A works."""\n\n\ndef helper():\n    pass\n') == {"test_a": "A works."}
+    body = ["    def pay(self, amount, *, fee=0) -> int:", "        total = amount + fee", "        for item in []:",
+            "            total += item", "        if total == 0:", "            return self.left"]
+    assert utils.local_names(body) == ["amount", "fee", "item", "total"]          # no self, no attributes, no ==
 
 
 def test_verify_retries_once_with_a_lesson_when_the_visible_tests_fail(tmp_path, monkeypatch):

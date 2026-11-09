@@ -1,0 +1,14 @@
+Bug report
+
+Something in this small Python project is broken. Behavior that users rely on no longer works as documented:
+
+  Expected: Depositing 5000 cents and then withdrawing 1200 cents should leave a balance of 3800.
+  Expected: An account with a 1000 cent overdraft and 500 cents may withdraw 1400 but then not 200 more.
+  Expected: Transferring 2500 from an account holding 10000 to one holding 1000 should leave 7500 and 3500.
+  Expected: A transfer of 2000 into a frozen account should fail and leave the sender at 5000.
+  Expected: With a 1000 minimum and a 200 fee, an account holding 600 drops to 400 and one holding 1500 stays.
+
+Right now the project does not meet these expectations. Find the bug in the source code under src/ and fix it. Do not modify the tests.
+
+Reproduce with:
+  python -m pytest -q tests/test_visible.py

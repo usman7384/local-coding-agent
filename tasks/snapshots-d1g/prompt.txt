@@ -1,0 +1,12 @@
+Bug report
+
+Something in this small Python project is broken. Behavior that users rely on no longer works as documented:
+
+  Expected: Saving two copies of some text should number them 1 and 2, and reading without a number returns the newest.
+  Expected: Trimming four saved copies down to the newest 2 should delete numbers 1 and 2 and keep 3 and 4.
+  Expected: Reading saved copy number 1 should return the text saved first.
+
+Right now the project does not meet these expectations. Find the bug in the source code under src/ and fix it. Do not modify the tests.
+
+Reproduce with:
+  python -m pytest -q tests/test_visible.py

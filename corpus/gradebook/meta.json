@@ -1,0 +1,16 @@
+{
+  "name": "gradebook",
+  "family": "stateful_class",
+  "files": ["scores.py", "weights.py", "report.py"],
+  "entries": {"Gradebook.add_score": "report.py", "Gradebook.final": "report.py", "Gradebook.letter": "report.py", "Gradebook.ranking": "report.py"},
+  "helpers": {
+    "check_weights": {"file": "weights.py", "caller": "Gradebook.__init__", "hops": 1},
+    "percentage": {"file": "scores.py", "caller": "Gradebook.add_score", "hops": 1},
+    "late_penalty": {"file": "scores.py", "caller": "Gradebook.add_score", "hops": 1},
+    "Gradebook.category_percent": {"file": "report.py", "caller": "Gradebook.final", "hops": 1},
+    "weighted_average": {"file": "weights.py", "caller": "Gradebook.final", "hops": 1},
+    "drop_lowest": {"file": "scores.py", "caller": "Gradebook.category_percent", "hops": 2},
+    "average": {"file": "scores.py", "caller": "Gradebook.category_percent", "hops": 2},
+    "active_weight": {"file": "weights.py", "caller": "weighted_average", "hops": 2}
+  }
+}

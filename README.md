@@ -4,7 +4,7 @@ A teaching-sized harness that answers one question: **how reliably does a small 
 your own GPU fix bugs?** Not just "can it fix a bug once", but "does it fix it every time?"
 
 The harness gives a local model a small Python project with a planted bug, lets it run commands and
-edit files inside a Docker sandbox, grades the result with tests it never saw, and repeats each of its 45 tasks
+edit files inside a Docker sandbox, grades the result with tests it never saw, and repeats each of its 119 tasks
 3 times. The whole harness is about 400 lines of plain Python, with no dependencies beyond the
 standard library (plus `pytest` for the tests). It is built to grow, one measured stage at a time, into a
 system with every modern agent component.
@@ -44,20 +44,22 @@ Read them in this order:
 | [`agent.py`](agent.py) | 93 | The agent loop: send the conversation to the model, read **one** action from its reply, run the matching tool, add the result, repeat (max 20 steps). Then verify with the visible tests, and retry once with a lesson if they fail |
 | [`tools.py`](tools.py) | 84 | The agent's tools (`bash`, `view`, `search`, `edit`) and the `TOOLS` dict that maps each action name to one. Adding a tool = one function + one dict line |
 | [`grade.py`](grade.py) | 27 | After the agent stops: check the tests were not edited, then run the visible tests and the hidden tests |
-| [`run.py`](run.py) | 71 | Runs every task 3 times and writes one line per attempt to `results/<run>/results.jsonl`, plus a step-by-step trace. Each line also records tokens, the git commit, the model digest, the Ollama version and the thinking settings |
+| [`run.py`](run.py) | 73 | Runs every task 3 times and writes one line per attempt to `results/<run>/results.jsonl`, plus a step-by-step trace. Each line also records tokens, the git commit, the model digest, the Ollama version and the thinking settings |
 | [`report.py`](report.py) | 51 | Prints how often each task passed, pass@1, pass-all, why attempts failed, how many got a retry, how often the tests failed exactly as before (stalls), how many edits applied, tokens per attempt and per success, and pass@1 on the held-out tasks |
 | [`bestofn.py`](bestofn.py) | 30 | Best-of-N from a run's repeats: keep the first attempt whose visible tests pass, for N = 1, 2, 3, with tokens per task |
 | [`stats.py`](stats.py) | 44 | Is a result real? pass@k vs pass^k, a 95% confidence interval, the run-to-run noise band, and a verdict when comparing two runs |
-| [`utils.py`](utils.py) | 157 | Small helpers that keep the files above short: shorten output, fix indentation, diff folders, JSON lines, pass@k / pass^k maths, bootstrap, provenance, finding functions and test docstrings, the stall fingerprint, the retry lesson |
-| [`make_tasks.py`](make_tasks.py) | 147 | Makes the tasks: breaks one line of a correct project in `corpus/` and keeps the bug only if the tests catch it |
+| [`utils.py`](utils.py) | 164 | Small helpers that keep the files above short: shorten output, fix indentation, diff folders, JSON lines, pass@k / pass^k maths, bootstrap, provenance, finding functions, their local names and test docstrings, the stall fingerprint, the retry lesson |
+| [`make_tasks.py`](make_tasks.py) | 156 | Makes the tasks: breaks one line of a correct project in `corpus/` and keeps the bug only if the tests catch it |
 
 Plus [`system_prompt.txt`](system_prompt.txt) (the instructions the model gets), [`tasks/`](tasks/)
-(the 45 bugs), [`make_tasks.py`](make_tasks.py) with [`corpus/`](corpus/) (how the bugs are made, below) and
+(the 119 bugs), [`make_tasks.py`](make_tasks.py) with [`corpus/`](corpus/) (how the bugs are made, below) and
 [`tests/test_minimal.py`](tests/test_minimal.py) (tests for the harness itself).
 
-**How the tasks are made.** [`corpus/`](corpus/) holds 9 small, correct projects, each with visible tests and
-hidden tests whose docstrings say what users expect. `make_tasks.py` breaks one line the way people do
-(`<=` becomes `<`, `+ 1` becomes `- 1`, `min` becomes `max`, a line is deleted, ...) and keeps the bug only if the
+**How the tasks are made.** [`corpus/`](corpus/) holds 15 small, correct projects (one to three files, helpers up
+to a few calls deep), each with visible tests and hidden tests whose docstrings say what users expect.
+`make_tasks.py` breaks one line the way people do (`<=` becomes `<`, `+ 1` becomes `- 1`, `min` becomes `max`, a
+line is deleted, a `return` loses its value, a variable is swapped for another one of the same function, a copy
+is dropped, ...) and keeps the bug only if the
 code still parses, some visible **and** some hidden tests fail, and some visible tests still pass. The bug report
 lists the docstrings of the failing visible tests. D1 = the bug is in a function the tests call, D2 = in a helper
 one call away, D3 = two bugs in two files. It is plain mutation testing: no model, no GPU, a few minutes on the CPU.
@@ -118,8 +120,9 @@ docker build -t agent-reliability-sandbox:1 docker/
 # 3. check the harness itself (fake model + real Docker grading)
 python -m pytest -q
 
-# 4. run: 45 tasks x 3 repeats (about 3.5 hours on an RTX 3060 laptop GPU)
+# 4. run: 119 tasks x 3 repeats (about 7 hours on an RTX 3060 laptop GPU), or only the first 45 (about 3 hours)
 python run.py --run-id baseline
+python run.py --run-id baseline-45 --tasks tasks/bench-45.txt
 python report.py results/baseline
 python stats.py results/baseline                      # CI, pass^k, noise band
 python stats.py results/baseline results/my-change    # is a change real or luck?

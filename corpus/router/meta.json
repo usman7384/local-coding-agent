@@ -1,0 +1,21 @@
+{
+  "name": "router",
+  "family": "dispatch_routing",
+  "files": ["segments.py", "convert.py", "router.py"],
+  "entries": {"split_path": "segments.py", "Router.add": "router.py", "Router.match": "router.py", "Router.url_for": "router.py"},
+  "helpers": {
+    "decode": {"file": "segments.py", "caller": "split_path", "hops": 1},
+    "is_hex": {"file": "segments.py", "caller": "decode", "hops": 2},
+    "parse_spec": {"file": "convert.py", "caller": "Router.add", "hops": 1},
+    "match_route": {"file": "router.py", "caller": "Router.match", "hops": 1},
+    "pick": {"file": "router.py", "caller": "Router.match", "hops": 1},
+    "build": {"file": "router.py", "caller": "Router.url_for", "hops": 1},
+    "step": {"file": "router.py", "caller": "match_route", "hops": 2},
+    "take": {"file": "convert.py", "caller": "step", "hops": 3},
+    "format_value": {"file": "convert.py", "caller": "build", "hops": 2},
+    "encode": {"file": "segments.py", "caller": "format_value", "hops": 3},
+    "join_path": {"file": "segments.py", "caller": "build", "hops": 2},
+    "to_int": {"file": "convert.py", "caller": "take", "hops": 4},
+    "to_str": {"file": "convert.py", "caller": "take", "hops": 4}
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "tablefmt",
+  "family": "text_formatting",
+  "files": ["cells.py", "columns.py", "render.py"],
+  "entries": {"cell_text": "cells.py", "truncate": "cells.py", "column_widths": "columns.py", "infer_alignments": "columns.py", "render": "render.py"},
+  "helpers": {
+    "format_number": {"file": "cells.py", "caller": "cell_text", "hops": 1},
+    "one_line": {"file": "cells.py", "caller": "cell_text", "hops": 1},
+    "is_number": {"file": "cells.py", "caller": "infer_alignments", "hops": 1},
+    "pad_cell": {"file": "columns.py", "caller": "format_line", "hops": 2},
+    "column_totals": {"file": "columns.py", "caller": "totals_row", "hops": 2},
+    "format_line": {"file": "render.py", "caller": "render", "hops": 1},
+    "rule": {"file": "render.py", "caller": "render", "hops": 1},
+    "totals_row": {"file": "render.py", "caller": "render", "hops": 1}
+  }
+}

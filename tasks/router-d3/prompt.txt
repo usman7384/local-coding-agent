@@ -1,0 +1,13 @@
+Bug report
+
+Something in this small Python project is broken. Behavior that users rely on no longer works as documented:
+
+  Expected: Splitting "/hello%20world/x" should give ["hello world", "x"].
+  Expected: Matching GET "/users/42" should return ("user_detail", {"id": 42}) with 42 as an int.
+  Expected: Matching GET "/users/me" should pick user_me even though "/users/<int:id>" also exists.
+  Expected: Matching GET "/files/a/b/c.txt" should give the rest "a/b/c.txt" as one parameter.
+
+Right now the project does not meet these expectations. Find the bug in the source code under src/ and fix it. Do not modify the tests.
+
+Reproduce with:
+  python -m pytest -q tests/test_visible.py

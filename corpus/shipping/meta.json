@@ -1,0 +1,19 @@
+{
+  "name": "shipping",
+  "family": "pricing_rules",
+  "files": ["rates.py", "zones.py", "quote.py"],
+  "entries": {"Quote.__init__": "quote.py", "Quote.add_parcel": "quote.py", "Quote.subtotal": "quote.py", "Quote.total": "quote.py"},
+  "helpers": {
+    "zone_for": {"file": "zones.py", "caller": "Quote.__init__", "hops": 1},
+    "Quote.parcel_cost": {"file": "quote.py", "caller": "Quote.subtotal", "hops": 1},
+    "price_for": {"file": "rates.py", "caller": "Quote.parcel_cost", "hops": 2},
+    "apply_zone": {"file": "zones.py", "caller": "Quote.parcel_cost", "hops": 2},
+    "billable_grams": {"file": "quote.py", "caller": "Quote.parcel_cost", "hops": 2},
+    "surcharge": {"file": "quote.py", "caller": "Quote.parcel_cost", "hops": 2},
+    "base_price": {"file": "rates.py", "caller": "price_for", "hops": 3},
+    "multiplier": {"file": "zones.py", "caller": "apply_zone", "hops": 3},
+    "volumetric_grams": {"file": "quote.py", "caller": "billable_grams", "hops": 3},
+    "extra_kg": {"file": "rates.py", "caller": "base_price", "hops": 4},
+    "started_kg": {"file": "rates.py", "caller": "extra_kg", "hops": 5}
+  }
+}

@@ -1,9 +1,10 @@
 """Make bug-fixing tasks from the correct projects in corpus/. This is mutation testing: no model is involved.
 
-    python make_tasks.py --per-project 5
+    python make_tasks.py --per-project 8
 
-For each project: break one line in one of the ways listed in BUGS, and keep the break only if the tests catch
-it. Then add tasks until the project has `--per-project` of them. Existing tasks are never changed.
+For each project: break one line in one of the ways listed in BUGS (or delete it, drop a return value, or use
+the wrong variable), and keep the break only if the tests catch it. Then add tasks until the project has
+`--per-project` of them. Existing tasks are never changed.
 """
 
 import argparse
@@ -17,12 +18,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-from utils import docstrings, functions, syntax_error
+from utils import docstrings, functions, local_names, syntax_error
 
-# Bugs people really write: (text, what it becomes). Each line can also be deleted.
+# Bugs people really write: (text, what it becomes). Each line can also be deleted, lose its return value, or
+# use the wrong variable (another local name of the same function).
 BUGS = [(" <= ", " < "), (" < ", " <= "), (" >= ", " > "), (" > ", " >= "), (" == ", " != "), (" != ", " == "),
         (" + 1", " - 1"), (" - 1", " + 1"), (" + ", " - "), (" - ", " + "), ("+=", "-="), ("-=", "+="),
-        (" and ", " or "), (" or ", " and "), ("min(", "max("), ("max(", "min("), ("[0]", "[-1]"), ("[-1]", "[0]")]
+        (" and ", " or "), (" or ", " and "), ("min(", "max("), ("max(", "min("), ("[0]", "[-1]"), ("[-1]", "[0]"),
+        (".copy()", ""), ("list(", "(")]                     # stale state: return the caller the real object
+NAME = r"(?<![.\w]){}\b"                                       # a whole variable name, not an attribute
 PROMPT = """Bug report
 
 Something in this small Python project is broken. Behavior that users rely on no longer works as documented:
@@ -42,8 +46,13 @@ def candidates(project: Path, meta: dict) -> list[dict]:
         lines = (project / "src" / file).read_text(encoding="utf-8").split("\n")
         for name, first, last in functions("\n".join(lines)):
             level = "d1" if name in meta["entries"] else "d2" if name in meta["helpers"] else None
+            names = local_names(lines[first - 1:last])
             for i in range(first, last) if level else []:                        # body lines, not the def line
                 changed = [lines[i].replace(a, b, 1) for a, b in BUGS if a in lines[i]] + [None]  # None = deleted
+                changed += [re.sub(r"^(\s*return) .+$", r"\1", lines[i])] if lines[i].strip().startswith("return ") else []
+                used = [a for a in names if re.search(NAME.format(a), lines[i])]   # local names on this line
+                changed += [re.sub(NAME.format(used[0]), names[names.index(used[0]) - 1], lines[i], count=1)
+                            ] if used and len(names) > 1 else []                  # wrong variable: one per line
                 found += [{"file": file, "line": i, "level": level, "new": new} for new in changed]
     return found
 
@@ -117,7 +126,7 @@ for project in sorted(Path("corpus").iterdir()):
     meta = json.loads((project / "meta.json").read_text(encoding="utf-8"))
     existing = [t for t in tasks.iterdir() if t.name.rsplit("-", 1)[0] == project.name]
     taken = {(f.name, f.read_text(encoding="utf-8")) for t in existing for f in (t / "repo" / "src").iterdir()}
-    want_d3 = 1 if len(meta["files"]) == 2 else 0                            # two-file projects get one more D3
+    want_d3 = 1 if len(meta["files"]) >= 2 else 0                            # multi-file projects get one D3
     need = args.per_project - len(existing)
     pool = candidates(project, meta)
     random.Random(f"{args.seed}:{project.name}").shuffle(pool)                # same seed -> same tasks
@@ -142,6 +151,6 @@ for project in sorted(Path("corpus").iterdir()):
 
     for bugs, fails in chosen:
         level = "d3" if len(bugs) == 2 else bugs[0]["level"]
-        name = next(n for n in (f"{project.name}-{level}{s}" for s in ["", "b", "c", "d", "e"]) if not (tasks / n).exists())
+        name = next(n for n in (f"{project.name}-{level}{s}" for s in ["", *"bcdefgh"]) if not (tasks / n).exists())
         write_task(tasks, name, project, meta, bugs, fails)
         print(name, [(b["file"], b["line"] + 1, b["new"]) for b in bugs], flush=True)
