@@ -1,9 +1,8 @@
-"""The fixer's tools served over MCP (Model Context Protocol; stdio transport: JSON-RPC 2.0, one message per line).
+"""The fixer's tools as an MCP server (stdio: JSON-RPC 2.0, one message per line).
 
     python mcp_server.py <project folder>
 
-With AGENT_MCP=1 the harness starts one server per attempt and the agent discovers its tools with tools/list, so a
-tool can be added here, or served by any other MCP server, without touching agent.py.
+With AGENT_MCP=1, run.py starts one per attempt and the agent discovers the tools with tools/list.
 """
 
 import json

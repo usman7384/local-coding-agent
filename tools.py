@@ -1,9 +1,5 @@
-"""The agent's tools, offered to the model through native tool calling.
-
-A tool is a plain function. Its name, docstring and typed arguments become the description the model sees
-(`utils.tool_spec`), and the model's call comes back as keyword arguments (`utils.call_tool`). Every tool gets the
-project folder first and returns the text the model reads next. Adding a tool = writing one function and adding it
-to the tool list of the agent that may use it (agent.py).
+"""The agent's tools: plain typed functions. Name, docstring and arguments become the tool's schema
+(utils.tool_spec). Each gets the project folder first and returns what the model reads next.
 """
 
 import re
@@ -13,14 +9,14 @@ from pathlib import Path
 import sandbox
 from utils import match_indentation, project_file, shorten, steady, syntax_error
 
-MAX_OUTPUT = 3000     # characters of tool output shown to the model (every task file fits whole)
+MAX_OUTPUT = 3000     # characters of output shown (every task file fits whole)
 DENIED = re.compile(r"\b(curl|wget|ssh|scp|sudo|pip install|git push)\b|\.ssh|id_rsa|rm -rf /(\s|$)")  # never needed
-NOTES = ".notes.md"   # the agent's plan, in the project root: outside src/, so it is never graded
+NOTES = ".notes.md"   # the plan file; outside src/, so never graded
 
 
 def bash(workdir: Path, command: str) -> str:
-    """Run a shell command in the project root, inside a sandbox (no network, 30-second limit). Use it to list
-    files and to run the tests: python -m pytest -q tests/test_visible.py"""
+    """Run a shell command in the project root, inside a sandbox without network. Use it to list files and to run
+    the tests."""
     code, output = sandbox.run(workdir, command)
     return f"exit code {code}\n{shorten(steady(output), MAX_OUTPUT)}"  # steady: no timings or addresses
 
@@ -79,7 +75,7 @@ def guard(name: str, args: dict) -> str | None:
 
 
 def reject(workdir: Path, check: str) -> str:
-    """Reject the fix, with proof: one line of Python, run from src/, that imports what it needs and asserts what
-    one call should return according to the bug report or the docstrings. It runs on the fixed code for real, and
-    the rejection counts only if the assert fails."""
-    return bash(workdir, "cd src && python -c " + shlex.quote(check))
+    """Reject the fix, with proof: one line of Python, run from src/ (or the project root if there is none), that
+    imports what it needs and asserts what one call should return according to the bug report or the docstrings.
+    It runs on the fixed code for real, and the rejection counts only if the assert fails."""
+    return bash(workdir, "cd src 2>/dev/null; python -c " + shlex.quote(check))

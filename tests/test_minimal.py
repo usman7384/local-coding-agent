@@ -271,7 +271,7 @@ def test_explorer_switch_adds_a_read_only_guess(tmp_path, monkeypatch):
     trace = agent.run_agent("Fix it.", tmp_path, seed=1, original=tmp_path / "src")
     assert [s["action"] for s in trace] == ["EXPLORE", "done"] and trace[0]["result"] == "src/a.py x: should be 2"
     assert seen[0][1] == ["view", "search"] and seen[2][1] == ["bash", "view", "search", "edit"]   # read-only first
-    assert "Its guess: src/a.py x: should be 2" in seen[2][0][1]["content"]          # the fixer gets the guess
+    assert "explorer's guess: src/a.py x: should be 2" in seen[2][0][1]["content"]          # the fixer gets the guess
 
 
 def test_critic_switch_rejects_only_with_a_failing_assert(tmp_path, monkeypatch):
@@ -400,3 +400,18 @@ def test_memory_joins_the_bug_report_and_promotion_needs_a_held_out_gain(tmp_pat
     assert "kept the current lessons" in learn(tmp_path / "with", tmp_path / "without")      # worse: not promoted
     assert "promoted" in learn(tmp_path / "without", tmp_path / "with")
     assert (tmp_path / "memory" / "lessons.md").read_text() == "- new lesson"
+
+
+def test_the_agent_works_on_any_repository_layout(tmp_path, monkeypatch):
+    repo, work = tmp_path / "repo", tmp_path / "work"
+    for folder in (repo, work):
+        (folder / "pkg").mkdir(parents=True)
+        (folder / "pkg" / "a.py").write_text("x = 1\n")
+    commands = []
+    fake_model(monkeypatch, [call("edit", path="pkg/a.py", old="x = 1", new="x = 2"), answer()])
+    monkeypatch.setattr(tools.sandbox, "run", lambda workdir, command: commands.append(command) or (0, "ok"))
+    agent.run_agent("Fix it.", work, seed=1, original=repo, code=".", test="make check")
+    assert commands == ["make check"]                                           # verified with the project's command
+    assert utils.changed(repo, work) == ["pkg/a.py"] and "+x = 2" in utils.diff_dirs(repo, work)
+    utils.copy_back(utils.changed(repo, work), work, repo)                      # what fix.py --apply does
+    assert (repo / "pkg" / "a.py").read_text() == "x = 2\n" and utils.changed(repo, work) == []

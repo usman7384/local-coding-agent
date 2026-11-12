@@ -5,3 +5,4 @@ __pycache__/
 build.log
 *.log
 results/*/attempts/*.tmp
+memory/

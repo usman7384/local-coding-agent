@@ -1,165 +1,177 @@
-# local-coding-agent
+# Coding agent
 
-A teaching-sized harness that answers one question: **how reliably does a small coding AI running on
-your own GPU fix bugs?** Not just "can it fix a bug once", but "does it fix it every time?"
+A state-of-the-art coding agent in about 1,000 lines of plain Python: a model that fixes bugs by calling tools in
+a loop, inside a locked-down sandbox, with sub-agents, verification, test-time compute, MCP tools, guardrails,
+opt-in memory, and an evaluation harness that measures **how reliably** it works, not just whether it can.
 
-The harness gives a local model a small Python project with a planted bug, lets it run commands and
-edit files inside a Docker sandbox, grades the result with tests it never saw, and repeats each of its 119 tasks
-3 times. The whole harness is about 400 lines of plain Python, with no dependencies beyond the
-standard library (plus `pytest` for the tests). It is built to grow, one measured stage at a time, into a
-system with every modern agent component.
+It runs any model behind an OpenAI-compatible chat API: a local model through Ollama or vLLM, or a hosted API.
+No dependencies beyond the Python standard library (plus `pytest` for the tests) and Docker.
+
+## Quickstart: fix a bug in your own repository
+
+You need Python 3.12, Docker, and a model. Clone this repository, then build the sandbox once:
+
+```bash
+docker build -t agent-reliability-sandbox:1 docker/
+```
+
+**With a local model** (free, private; a 6 GB GPU is enough):
+
+```bash
+ollama pull qwen3.5:4b
+ollama create arh-qwen3.5-4b-8k -f ollama/Modelfile.qwen3.5-4b      # pins an 8k context
+python fix.py --repo ../my-project --issue "Dates before 1970 crash the parser"
+```
+
+**With a hosted model** (any OpenAI-compatible API that supports tool calls):
+
+```bash
+export LLM_BASE_URL=https://<provider>/v1 LLM_MODEL=<model> LLM_API_KEY=<key> LLM_THINK=
+python fix.py --repo ../my-project --issue issue.md --test "python -m pytest -q tests/test_dates.py"
+```
+
+The agent works on a copy of the repository inside the sandbox. If the project has a `requirements.txt`, it is
+installed once, with network, before the agent starts (`--setup` runs any other command instead); after that the
+sandbox has no network. `fix.py` prints the diff and whether the tests pass, and writes the fix into your
+repository only with `--apply` and passing tests. Turn on more components with the switches below, for example
+`AGENT_CRITIC=1 AGENT_SAMPLES=3 python fix.py ...`.
 
 ![How it works](docs/how-it-works.svg)
 
-## The agent as a graph
+## Architecture
 
-The same agent drawn the way LangGraph draws agents: **nodes** are steps, **solid edges** always happen, and
-**dashed edges** are branches chosen by the model's reply.
+![Agent architecture](docs/graph-current.svg)
 
-![Current agent graph](docs/graph-current.svg)
+The core is one loop (`agent.loop`): send the conversation and the tool list to the model, run the tool calls it
+returns, put the results back, repeat until it answers without a tool call. Everything else is built around that
+loop, and every component beyond the core is a switch, off by default, so each can be measured on its own.
 
-- `setup` copies the buggy project into a temp folder and reads the bug report (`run.py`).
-- `call_model` sends the conversation to the local LLM and gets one reply (`agent.ask_model`), with or without
-  thinking for a reasoning model (`LLM_THINK`).
-- `open files` re-reads the (at most 2) files the agent viewed or edited most recently and shows them,
-  with line numbers, at the end of every prompt, so the model edits the real code, not its memory of it.
-- The reply's action picks the next node through the `TOOLS` dict in `tools.py`: `bash` runs a command in
-  Docker, `view` shows a file with line numbers, `search` finds text, `edit` changes a file, `malformed` sends
-  a correction. Each result goes back into the conversation, and the loop repeats.
-- `DONE`, or running out of 20 steps, leads to `verify`: the harness runs the visible tests itself. If they
-  fail, the agent gets **one retry**: a fresh conversation whose bug report carries a lesson (what the failed
-  try changed in `src/` and how the tests still fail). Otherwise, and after the retry, `grade` (`grade.py`).
+| Component | What it does | Where | Switch |
+|---|---|---|---|
+| **Tool calling** | Native tool calls. Each tool is a typed function; its JSON schema is generated from the signature and docstring. A call that does not fit any tool runs nothing and returns an error the model can read | `tools.py`, `utils.tool_spec`, `utils.call_tool` | always |
+| **Sandbox** | Every command runs in a fresh Docker container: no network, 1 CPU, 768 MB, non-root, 30 s, tests mounted read-only | `sandbox.py` | always |
+| **Context** | The last 5 turns, plus the 2 files in use shown fresh from disk at every step | `agent.loop` | always |
+| **Verify + retry** | The harness runs the visible tests itself; on failure, one more try in a fresh conversation, with a lesson from the failed one | `agent.run_agent` | always |
+| **Model gateway** | Any OpenAI-compatible server, an API key, retries with backoff on rate limits and server errors, cost per attempt | `agent.ask_model` | `LLM_*` |
+| **Explorer** | A read-only sub-agent (view, search) that finds the bug before the first edit | `agent.explore` | `AGENT_EXPLORER=1` |
+| **Critic** | A sub-agent that reviews a green fix and may reject it only with an `assert` that the harness runs | `agent.critique` | `AGENT_CRITIC=1` |
+| **Plan** | A `plan` tool; the plan and notes stay in view at every step | `tools.plan` | `AGENT_PLAN=1` |
+| **Compaction** | Older turns stay in view, their tool results shrunk to the first line and the failing tests | `utils.mask` | `AGENT_COMPACT=1` |
+| **Best-of-N** | Fresh samples from the original code until one passes verify | `agent.run_agent` | `AGENT_SAMPLES=N` |
+| **MCP** | The tools are served by an MCP server (stdio, JSON-RPC) and discovered at run time | `mcp_server.py`, `utils.mcp_session` | `AGENT_MCP=1` |
+| **Guardrails** | A pre-call hook refuses network, privilege and secret-reading commands; a loop breaker stops a try that repeats one call | `tools.guard`, `utils.repeated` | `AGENT_GUARDRAILS=1` |
+| **Budget** | A token budget per try | `agent.loop` | `AGENT_BUDGET=N` |
+| **Memory** | Lessons distilled from graded runs join the bug report; a new version is promoted only if it improves held-out tasks | `learn.py` | `AGENT_MEMORY=file` |
+| **Tracing** | Every model and tool call is a span with tokens and latency; every attempt records cost, provenance and switches | `agent.loop`, `run.py` | always |
 
-Where it is going: the planned graph. Every node is tagged with the stage that adds it.
+## Design decisions
 
-![Future agent graph](docs/graph-future.svg)
+| Decision | Chosen | Alternative | Why |
+|---|---|---|---|
+| Action format | Native tool calls, a JSON schema per tool | Actions in text, parsed by regex | No parser to maintain, typed arguments, parallel calls |
+| Agent shape | One loop; sub-agents are the same loop with other prompts and tools | A fixed pipeline (localize, repair, validate) | The loop adapts to the task; the pipeline's steps exist as sub-agents |
+| Trust | The harness verifies with tests; a critic's claim counts only if its assert fails | The model's "done" or its review | A model cannot run code in its head; claims are checked, not trusted |
+| Context | Recent turns + files fresh from disk | The full history | Edits are made against the real file, not the model's memory of it |
+| Recovery | One retry with a lesson; best-of-N fresh samples | Many retries in one conversation | A fresh conversation drops dead ends; a lesson keeps what was learned |
+| Isolation | A container per command, tests read-only | Run on the host | The agent cannot change what it is graded on, or reach the network |
+| Model | Behind a gateway | Tied to one provider | Swap models without touching the agent; compare them on the same tasks |
+| Self-improvement | Opt-in, gated by a held-out evaluation | Always learning | A change that only helps on the tasks it learned from never ships |
+| Evaluation | Generated tasks, hidden tests, repeats, pass^k, confidence intervals, a held-out split | One run, one number | Runs of the same agent differ by luck; a change counts only beyond that |
 
-## The files
+## Configuration
 
-Read them in this order:
-
-| File | Lines | What it does |
+| Variable | Default | What it does |
 |---|---|---|
-| [`sandbox.py`](sandbox.py) | 30 | Runs one shell command in a fresh Docker container that sees only the task's folder, with `tests/` and `pytest.ini` read-only: no network, 1 CPU, 768 MB, non-root, 30-second limit |
-| [`agent.py`](agent.py) | 93 | The agent loop: send the conversation to the model, read **one** action from its reply, run the matching tool, add the result, repeat (max 20 steps). Then verify with the visible tests, and retry once with a lesson if they fail |
-| [`tools.py`](tools.py) | 84 | The agent's tools (`bash`, `view`, `search`, `edit`) and the `TOOLS` dict that maps each action name to one. Adding a tool = one function + one dict line |
-| [`grade.py`](grade.py) | 27 | After the agent stops: check the tests were not edited, then run the visible tests and the hidden tests |
-| [`run.py`](run.py) | 73 | Runs every task 3 times and writes one line per attempt to `results/<run>/results.jsonl`, plus a step-by-step trace. Each line also records tokens, the git commit, the model digest, the Ollama version and the thinking settings |
-| [`report.py`](report.py) | 51 | Prints how often each task passed, pass@1, pass-all, why attempts failed, how many got a retry, how often the tests failed exactly as before (stalls), how many edits applied, tokens per attempt and per success, and pass@1 on the held-out tasks |
-| [`bestofn.py`](bestofn.py) | 30 | Best-of-N from a run's repeats: keep the first attempt whose visible tests pass, for N = 1, 2, 3, with tokens per task |
-| [`stats.py`](stats.py) | 44 | Is a result real? pass@k vs pass^k, a 95% confidence interval, the run-to-run noise band, and a verdict when comparing two runs |
-| [`utils.py`](utils.py) | 164 | Small helpers that keep the files above short: shorten output, fix indentation, diff folders, JSON lines, pass@k / pass^k maths, bootstrap, provenance, finding functions, their local names and test docstrings, the stall fingerprint, the retry lesson |
-| [`make_tasks.py`](make_tasks.py) | 156 | Makes the tasks: breaks one line of a correct project in `corpus/` and keeps the bug only if the tests catch it |
+| `LLM_MODEL` | `arh-qwen3.5-4b-8k` | The model name |
+| `LLM_BASE_URL` | `http://localhost:11434/v1` | Any OpenAI-compatible chat API |
+| `LLM_API_KEY` | none | Sent as a bearer token; never recorded |
+| `LLM_PRICE_IN`, `LLM_PRICE_OUT` | `0` | USD per million tokens, for cost per attempt |
+| `LLM_THINK` | `none` | `reasoning_effort` for reasoning models; `""` sends nothing |
+| `LLM_MAX_TOKENS` | `768` | The reply limit; thinking tokens count against it |
+| `AGENT_EXPLORER`, `AGENT_CRITIC`, `AGENT_PLAN`, `AGENT_COMPACT`, `AGENT_MCP`, `AGENT_GUARDRAILS` | off | `1` turns the component on |
+| `AGENT_SAMPLES` | `1` | Best-of-N samples |
+| `AGENT_BUDGET` | `0` | Tokens per try (0 = no limit) |
+| `AGENT_MEMORY` | none | A lessons file from `learn.py` |
+| `AGENT_TIMEOUT` | `30` | Seconds per sandbox command; raise it for slow test suites |
 
-Plus [`system_prompt.txt`](system_prompt.txt) (the instructions the model gets), [`tasks/`](tasks/)
-(the 119 bugs), [`make_tasks.py`](make_tasks.py) with [`corpus/`](corpus/) (how the bugs are made, below) and
-[`tests/test_minimal.py`](tests/test_minimal.py) (tests for the harness itself).
+Every result line records the switches, the git commit, the model digest and the server version, and a run
+refuses to resume with different values, so one run never mixes two configurations.
 
-**How the tasks are made.** [`corpus/`](corpus/) holds 15 small, correct projects (one to three files, helpers up
-to a few calls deep), each with visible tests and hidden tests whose docstrings say what users expect.
-`make_tasks.py` breaks one line the way people do (`<=` becomes `<`, `+ 1` becomes `- 1`, `min` becomes `max`, a
-line is deleted, a `return` loses its value, a variable is swapped for another one of the same function, a copy
-is dropped, ...) and keeps the bug only if the
-code still parses, some visible **and** some hidden tests fail, and some visible tests still pass. The bug report
-lists the docstrings of the failing visible tests. D1 = the bug is in a function the tests call, D2 = in a helper
-one call away, D3 = two bugs in two files. It is plain mutation testing: no model, no GPU, a few minutes on the CPU.
+## Files
 
-## How one attempt works
+| File | What it does |
+|---|---|
+| [`fix.py`](fix.py) | Fix an issue in your own repository: a sandboxed copy, an optional setup step, the agent, the diff |
+| [`agent.py`](agent.py) | The loop, the model gateway, verify and retry, best-of-N, the explorer and the critic |
+| [`tools.py`](tools.py) | The tools as typed functions (`bash`, `view`, `search`, `edit`, `plan`, `reject`) and the guardrail hook |
+| [`sandbox.py`](sandbox.py) | One command in a fresh, locked-down Docker container |
+| [`prompts/`](prompts/) | The fixer, explorer, critic and learner prompts |
+| [`mcp_server.py`](mcp_server.py) | The tools as an MCP server |
+| [`learn.py`](learn.py) | Distil lessons from graded runs; promote them only on a held-out gain |
+| [`run.py`](run.py) | Runs every task several times, in parallel workers if asked, and records one line per attempt plus a trace |
+| [`grade.py`](grade.py) | Checks the tests were not changed, then runs the visible and the hidden tests |
+| [`report.py`](report.py) | Pass rates, failure modes, sub-agent verdicts, guardrail stops, latency, tokens and cost |
+| [`stats.py`](stats.py) | pass@k and pass^k, a bootstrap confidence interval, the noise band, and a verdict between two runs |
+| [`bestofn.py`](bestofn.py) | Success against compute, replayed from a run's repeats |
+| [`make_tasks.py`](make_tasks.py) | Generates tasks by breaking correct code and keeping the bugs the tests catch |
+| [`utils.py`](utils.py) | Small helpers: tool schemas and calls, the MCP client, masking, diffs, statistics, provenance |
 
-1. **Copy.** `run.py` copies `tasks/<id>/repo` (the buggy project plus its visible tests) into a
-   new temporary folder. The original task files are never changed.
-2. **Prompt.** `agent.py` sends the model two messages: the system prompt (how to act) and the bug
-   report from `tasks/<id>/prompt.txt`.
-3. **Act.** The model answers with a little reasoning and **one** action in a fenced block:
+Plus [`tasks/`](tasks/) (125 bugs, 27 held out), [`corpus/`](corpus/) (the 15 correct projects they come from),
+[`redteam/`](redteam/) (tasks with prompt injections in the code), [`ollama/`](ollama/) (model files with an 8k
+context) and [`tests/`](tests/test_minimal.py) (tests for the harness, with a fake model).
 
-   ````
-   The test expects [2, 3] but gets []. Let me look at the code.
-   ```
-   BASH: cat src/ringlog.py
-   ```
-   ````
+## Tasks
 
-   | Action | What happens |
-   |---|---|
-   | `BASH: <command>` | `sandbox.py` runs it in Docker against the temp folder. The exit code and output, shortened to 3,000 characters (enough for every task file), go back to the model |
-   | `VIEW: <file>` or `VIEW: <file> 10-30` | `tools.py` shows the file, or some lines of it, with line numbers |
-   | `SEARCH: <text>` | `tools.py` lists every line containing the text in the project's `.py` files, as `file:line: code` |
-   | `EDIT: <file>` with `<<<<<<< OLD` / `=======` / `>>>>>>> NEW` | `tools.py` replaces the OLD text with the NEW text in the temp folder. OLD must appear exactly once; wrong indentation and line numbers copied from VIEW are tolerated; an edit that would break Python syntax, or that targets `tests/` or `pytest.ini`, is refused and nothing is saved |
-   | `DONE` | The agent stops |
+[`corpus/`](corpus/) holds 15 small, correct projects (one to three files), each with visible tests and hidden
+tests whose docstrings say what users expect. `make_tasks.py` breaks lines the way people do (`<=` becomes `<`,
+`+ 1` becomes `- 1`, a line is deleted, a `return` loses its value, a variable is swapped, a copy is dropped) and
+keeps a bug only if some visible **and** some hidden tests fail while some visible tests still pass. D1: the bug is
+in a function the tests call; D2: in a helper; D3: two bugs in two files; D4: three bugs in three files. The bug
+report lists what users expect, from the failing tests' docstrings. 27 tasks, including two whole projects, are
+held out: never used to design anything, only to check that improvements carry over to unseen code.
 
-   A reply without exactly one action block is **malformed**: nothing runs, the model is told so,
-   the step still counts, and the bad reply is left out of the conversation so the model does not
-   copy it.
-4. **Repeat** until `DONE` or 20 steps. The model always sees the system prompt, the bug report, the
-   last 10 messages, and the current content of the 2 files it viewed or edited most recently, read fresh
-   from disk. That stays well inside its 8,192-token context window.
-   **Verify:** the harness then runs the visible tests itself. If they fail, the agent gets one more try
-   of 20 steps with a fresh conversation, whose bug report carries a lesson from the failed try.
-5. **Grade.** `grade.py` checks whether `tests/test_visible.py` or `pytest.ini` was changed
-   (tampering; the tests are mounted read-only, so this should never happen). It then puts the original tests back, adds `tasks/<id>/hidden/test_hidden.py`, and
-   runs both test files in Docker. An attempt **passes** only if both pass and nothing was
-   tampered with. Saying `DONE` proves nothing.
-6. **Record.** One JSON line per attempt: passed or not, the outcome (`passed`, `wrong_fix`,
-   `ran_out_of_steps`, `tampered`), steps, tries, malformed replies, seconds, the seed, and the diff of what
-   the agent changed.
-
-**Seeds.** The model picks words with some randomness (temperature 0.7), which is why repeats
-differ. Each call sends a seed derived from (task, repeat, step), so the same attempt can be
-re-sampled the same way.
-
-## Run it
+## Evaluate it
 
 ```bash
-# 1. a local model (Ollama): qwen3.5 4B, 4-bit, pinned to an 8k context window (ollama/ has other Modelfiles)
+# a model: locally with Ollama, or any OpenAI-compatible API (set LLM_BASE_URL, LLM_MODEL, LLM_API_KEY)
 ollama pull qwen3.5:4b
 ollama create arh-qwen3.5-4b-8k -f ollama/Modelfile.qwen3.5-4b
 
-# 2. the sandbox image (Python 3.12 + pytest, non-root user)
+# the sandbox image, and the harness's own tests (a fake model, real Docker)
 docker build -t agent-reliability-sandbox:1 docker/
-
-# 3. check the harness itself (fake model + real Docker grading)
 python -m pytest -q
 
-# 4. run: 119 tasks x 3 repeats (about 7 hours on an RTX 3060 laptop GPU), or only the first 45 (about 3 hours)
+# run every task 3 times, then report
 python run.py --run-id baseline
-python run.py --run-id baseline-45 --tasks tasks/bench-45.txt
 python report.py results/baseline
-python stats.py results/baseline                      # CI, pass^k, noise band
-python stats.py results/baseline results/my-change    # is a change real or luck?
-python bestofn.py results/baseline                     # success vs compute, best-of-N
+
+# turn components on and compare: is the difference real or luck?
+AGENT_CRITIC=1 AGENT_EXPLORER=1 python run.py --run-id with-subagents
+python stats.py results/baseline results/with-subagents
+
+# a hosted model, 8 attempts in parallel, with cost tracking
+LLM_BASE_URL=https://api.example.com/v1 LLM_MODEL=<model> LLM_API_KEY=... LLM_THINK= \
+  LLM_PRICE_IN=3 LLM_PRICE_OUT=15 python run.py --run-id hosted --workers 8
+
+# prompt-injection tasks, without and with guardrails
+python run.py --run-id redteam --dir redteam
+AGENT_GUARDRAILS=1 python run.py --run-id redteam-guarded --dir redteam
+
+# opt-in self-improvement: learn, test the candidate, promote only on a held-out gain
+python learn.py results/baseline
+AGENT_MEMORY=memory/candidate.md python run.py --run-id with-memory
+python learn.py --promote results/baseline results/with-memory
 ```
 
-Quick try: `python run.py --run-id smoke --repeats 1 --tasks ringlog-d1,workdays-d1`.
-Interrupted runs resume where they stopped, but only with the same commit and model: if either
-changed, `run.py` stops and asks for a new `--run-id`, so one run never mixes two experiments. Point it at
-another model with `LLM_MODEL` and `LLM_BASE_URL` (any OpenAI-compatible server; the model digest and server
-version are read from Ollama and recorded as "unknown" elsewhere).
-For a reasoning model, `LLM_THINK` is sent as `reasoning_effort` (`none`, the default, turns thinking off) and `LLM_MAX_TOKENS`
-raises the reply limit (768), since thinking tokens count against it. Both are recorded in every result line.
+Quick try: `python run.py --run-id smoke --repeats 1 --tasks ringlog-d1,workdays-d1`. Interrupted runs resume where
+they stopped.
 
-## What this measures
+## What it measures
 
-- **pass@1** = the share of all attempts that passed: how often it works.
-- **pass-all** = the share of tasks that passed in every repeat: how *reliably* it works.
-- **pass@k** = the chance that *at least one* of k tries passes (capability). **pass^k** = the chance that *all* k
-  tries pass (reliability). pass^k for k = the number of repeats is pass-all, estimated from the data.
-- **95% confidence interval**: resample the tasks 10,000 times (bootstrap) and see how much pass@1 moves.
-- **Noise band**: each repeat is a full pass over all tasks, so the spread between repeats is pure luck. Two runs
-  of the *same* agent can differ by this much, so a change only counts if it beats the band *and* its interval
-  excludes zero.
-
-## Growing it
-
-Each stage adds one idea (better tools, context engineering, sub-agents, test-time compute, model comparisons,
-harder tasks, MCP, learning from traces, production safety) and is kept only if a measured run shows a real
-improvement: its confidence interval excludes zero and it beats the noise band.
-
-## Code rules
-
-This project stays teaching-sized forever:
-
-- Minimal code with short inline comments. If a loop fits in 4 readable lines, it is 4 lines.
-- No long if/elif chains: use a dict (like `TOOLS`) or one readable expression.
-- No extra functions and no long hand-written parsers.
-- Small helpers go in `utils.py`, so the main files read like a story.
-- Diagrams in `docs/` change in the same commit as the code they describe.
+- **pass@1**: the share of attempts that passed; **pass^k**: the chance that *all* k tries pass (reliability);
+  **pass@k**: that at least one does (capability).
+- **95% confidence interval** (bootstrap over tasks) and the **noise band** (the spread between repeats of the same
+  agent): a change counts only if it beats both.
+- **Failure modes**: wrong fix (visible tests pass, hidden ones fail), ran out of steps, tampered with the tests,
+  stopped by a guardrail, prompt injection followed.
+- **Cost and latency**: tokens and dollars per attempt and per success, model and tool latency (p50, p95).

@@ -63,11 +63,31 @@ def same_file(a: Path, b: Path) -> bool:
     return a.is_file() and b.is_file() and a.read_bytes() == b.read_bytes()
 
 
+SKIP = {".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".notes.md"}  # never code
+
+
+def changed(before: Path, after: Path) -> list[str]:
+    """The files (relative paths) that differ between two folders."""
+    names = set().union(*({p.relative_to(root).as_posix() for p in root.rglob("*")
+                           if p.is_file() and not SKIP & set(p.relative_to(root).parts)} for root in (before, after)))
+    return [name for name in sorted(names) if not same_file(before / name, after / name)]
+
+
+def copy_back(names: list[str], source: Path, target: Path) -> None:
+    """Make these files in `target` match `source`: copy them over, or delete the ones `source` lacks."""
+    for name in names:
+        if (source / name).exists():
+            (target / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source / name, target / name)
+        else:
+            (target / name).unlink(missing_ok=True)
+
+
 def diff_dirs(before: Path, after: Path) -> str:
-    """Unified diff of every .py file in `before` against the same file in `after`."""
-    read = lambda p: p.read_text(encoding="utf-8").splitlines(keepends=True) if p.exists() else []  # noqa: E731
-    return "".join(line for f in sorted(before.glob("*.py"))
-                   for line in difflib.unified_diff(read(f), read(after / f.name), f"a/{f.name}", f"b/{f.name}"))
+    """A unified diff of every file that differs between two folders."""
+    read = lambda p: p.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True) if p.exists() else []  # noqa: E731
+    return "".join(line for name in changed(before, after)
+                   for line in difflib.unified_diff(read(before / name), read(after / name), f"a/{name}", f"b/{name}"))
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -149,9 +169,8 @@ def docstrings(test_source: str) -> dict[str, str]:
 
 
 def tool_spec(tool) -> dict:
-    """A tool function as the chat API describes a tool: its name, its docstring, and its arguments after `workdir`
-    (str -> string, int -> integer; arguments without a default are required). A tool served over MCP brings its
-    own description (`.spec`)."""
+    """A tool's JSON schema for the chat API, from its name, docstring and typed arguments (after `workdir`).
+    MCP tools bring their own (`.spec`)."""
     if hasattr(tool, "spec"):
         return tool.spec
     args = list(inspect.signature(tool).parameters.values())[1:]
@@ -163,9 +182,8 @@ def tool_spec(tool) -> dict:
 
 
 def call_tool(tools: dict, workdir: Path, call: dict, hooks: list = ()) -> tuple[str, dict, str]:
-    """Run one tool call from the model: (tool name, arguments, result). A call to an unknown tool, or with
-    arguments that are not JSON or do not fit the tool, runs nothing and is returned as "malformed", with a result
-    the model can read and correct. Every hook sees the call first and may refuse it (its message is the result)."""
+    """Run one tool call: (name, arguments, result). A call that does not fit any tool runs nothing ("malformed");
+    a hook may refuse a call, and its message becomes the result."""
     name, raw = call["function"]["name"], call["function"].get("arguments") or "{}"
     try:
         args = json.loads(raw) if isinstance(raw, str) else raw
@@ -173,26 +191,25 @@ def call_tool(tools: dict, workdir: Path, call: dict, hooks: list = ()) -> tuple
     except (KeyError, TypeError, ValueError):
         note = f"Nothing was run: {name}({raw}) is not a valid call. The tools are: {', '.join(tools)}."
         return "malformed", {"tool": name, "arguments": raw}, note
-    refusal = next(filter(None, (hook(name, args) for hook in hooks)), None)   # pre-call hooks, e.g. guardrails
+    refusal = next(filter(None, (hook(name, args) for hook in hooks)), None)
     return name, args, refusal or tools[name](workdir, **args)
 
 
 @contextlib.contextmanager
 def mcp_session(command: list[str]):
-    """Start an MCP server (stdio transport: JSON-RPC 2.0, one message per line), discover its tools, and yield them
-    as functions the agent loop can call, each with the server's own description as `.spec`. Stops it afterwards."""
+    """Start an MCP server (stdio: JSON-RPC 2.0, one message per line) and yield its tools as local functions."""
     server = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8")
     ids = itertools.count(1)
 
     def rpc(method: str, params: dict, request: bool = True):
-        """Send a request (or a notification, which gets no answer) and return its result."""
+        """Send a request (or a notification: no id, no answer) and return its result."""
         server.stdin.write(json.dumps({"jsonrpc": "2.0", "method": method, "params": params,
                                        **({"id": next(ids)} if request else {})}) + "\n")
         server.stdin.flush()
         return json.loads(server.stdout.readline())["result"] if request else None
 
     def proxy(tool: dict):
-        """A local stand-in for one server tool: same name, the server's schema, calls forwarded to the server."""
+        """A local stand-in for a server tool: its name and schema; calls go to the server."""
         def forward(workdir: Path, **args) -> str:
             return rpc("tools/call", {"name": tool["name"], "arguments": args})["content"][0]["text"]
         forward.__name__, forward.spec = tool["name"], {"type": "function", "function": {
@@ -204,49 +221,46 @@ def mcp_session(command: list[str]):
         rpc("notifications/initialized", {}, request=False)
         yield [proxy(tool) for tool in rpc("tools/list", {})["tools"]]
     finally:
-        server.stdin.close()                                                 # the server stops at the end of input
+        server.stdin.close()                                                 # end of input stops the server
         server.wait(timeout=30)
 
 
 def transient(error: Exception) -> bool:
-    """Is a failed model call worth retrying? Yes for timeouts, lost connections, rate limits (429) and server
-    errors (5xx); no for other HTTP errors, such as a bad request or a wrong API key."""
-    code = getattr(error, "code", None)                                      # only HTTP errors have a status code
+    """Worth retrying? Timeouts, lost connections, 429 and 5xx: yes. Other HTTP errors (bad request, key): no."""
+    code = getattr(error, "code", None)
     return code is None or code == 429 or code >= 500
 
 
 def mask(turn: list[dict]) -> list[dict]:
-    """Observation masking for an old turn: the model's reply and calls stay, and each tool result shrinks to its
-    first line plus the failing tests it showed, so old decisions stay in view at a fraction of the tokens."""
+    """Observation masking: an old turn keeps its reply and calls; each result shrinks to its first line and failures."""
     return [{**m, "content": "\n".join(filter(None, [m["content"].split("\n")[0], fingerprint(m["content"]),
                                                      "[older result shortened]"]))} if m["role"] == "tool" else m
             for m in turn]
 
 
 def repeated(trace: list[dict], times: int = 3) -> bool:
-    """Did the last `times` tool calls all make the same call? (a loop the agent will not leave by itself)"""
+    """Were the last `times` tool calls the same call?"""
     calls = {json.dumps([s["action"], s.get("args")], sort_keys=True) for s in trace[-times:]}
     return len(trace) >= times and len(calls) == 1
 
 
 def next_step(trace: list[dict]) -> int:
-    """The number of the next step in a trace. Steps keep counting across tries, so every try samples differently."""
+    """The next step number; steps keep counting across tries and samples."""
     return trace[-1]["step"] + 1 if trace else 1
 
 
 def harness_step(trace: list[dict], action: str, result: str = "") -> dict:
-    """A trace entry for a step the harness takes itself (RETRY, SAMPLE): no model call, no tokens."""
+    """A trace entry for the harness's own steps (RETRY, SAMPLE): no model call."""
     return {"step": next_step(trace), "action": action, "result": result, "tokens_in": 0, "tokens_out": 0}
 
 
-def restore(original: Path, src: Path) -> None:
-    """Put the original code back, so a new sample starts from the buggy project, not from another sample's edits."""
-    shutil.rmtree(src, ignore_errors=True)
-    shutil.copytree(original, src)
+def restore(original: Path, code: Path) -> None:
+    """Put the original code back for a fresh sample (installed packages stay)."""
+    copy_back(changed(original, code), original, code)
 
 
 def sub_agent(step: int, action: str, result: str, steps: list[dict]) -> dict:
-    """One trace entry for a sub-agent's whole run: its verdict, its own steps, and the tokens they used."""
+    """One trace entry for a sub-agent's run: its answer, its steps, their tokens."""
     return {"step": step, "action": action, "result": result, "steps": steps,
             "tokens_in": sum(s["tokens_in"] for s in steps), "tokens_out": sum(s["tokens_out"] for s in steps)}
 
