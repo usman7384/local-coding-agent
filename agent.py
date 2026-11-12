@@ -13,16 +13,20 @@ Sub-agents are the same loop with their own prompt and tools. Two are switches, 
 import json
 import os
 import re
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 from grade import PYTEST
 from tools import bash, edit, reject, search, view
-from utils import call_tool, diff_dirs, lesson, next_step, project_file, sub_agent, tool_spec
+from utils import call_tool, diff_dirs, lesson, next_step, project_file, sub_agent, tool_spec, transient
 
 MODEL = os.environ.get("LLM_MODEL", "arh-qwen3.5-4b-8k")
 SERVER = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")      # any OpenAI-compatible chat API
 URL = SERVER + "/chat/completions"
+API_KEY = os.environ.get("LLM_API_KEY", "")                               # for hosted APIs; never recorded
+PRICES = [float(os.environ.get(f"LLM_PRICE_{kind}", "0")) for kind in ("IN", "OUT")]  # USD per million tokens
 # Reasoning models think before they answer. LLM_THINK="none" (the default) turns that off, and models that do not
 # think ignore it; "" sends nothing. Thinking tokens count against MAX_TOKENS, so a thinking run needs a larger one.
 THINK = os.environ.get("LLM_THINK", "none")
@@ -44,13 +48,22 @@ PROMPTS = {name: (Path(__file__).parent / "prompts" / f"{name}.txt").read_text(e
 
 
 def ask_model(messages: list[dict], tools: list, seed: int) -> tuple[dict, dict]:
-    """One call to the model through its OpenAI-compatible chat API. Returns its message and the token counts."""
-    body = {"model": MODEL, "messages": messages, "tools": [tool_spec(t) for t in tools], "seed": seed,
-            "temperature": 0.7, "top_p": 0.9, "max_tokens": MAX_TOKENS,
+    """One call to the model through its OpenAI-compatible chat API (the gateway: any server, an API key, retries
+    with backoff on transient failures). Returns its message and the token counts."""
+    body = {"model": MODEL, "messages": messages, "seed": seed, "temperature": 0.7, "top_p": 0.9,
+            "max_tokens": MAX_TOKENS, **({"tools": [tool_spec(t) for t in tools]} if tools else {}),
             **({"reasoning_effort": THINK} if THINK else {})}                 # thinking: only when set
-    request = urllib.request.Request(URL, json.dumps(body).encode(), {"Content-Type": "application/json"})
-    with urllib.request.urlopen(request, timeout=600) as response:
-        answer = json.load(response)
+    headers = {"Content-Type": "application/json", **({"Authorization": f"Bearer {API_KEY}"} if API_KEY else {})}
+    request = urllib.request.Request(URL, json.dumps(body).encode(), headers)
+    for wait in (2, 8, 30, None):                                           # 3 retries: rate limits, server errors
+        try:
+            with urllib.request.urlopen(request, timeout=600) as response:
+                answer = json.load(response)
+            break
+        except (urllib.error.URLError, TimeoutError) as error:
+            if wait is None or not transient(error):                       # a bad request will not get better
+                raise
+            time.sleep(wait)
     usage = answer["usage"]                                                 # tokens read and written by this call
     return answer["choices"][0]["message"], {"tokens_in": usage["prompt_tokens"], "tokens_out": usage["completion_tokens"]}
 

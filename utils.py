@@ -170,6 +170,13 @@ def call_tool(tools: dict, workdir: Path, call: dict) -> tuple[str, dict, str]:
     return name, args, tools[name](workdir, **args)
 
 
+def transient(error: Exception) -> bool:
+    """Is a failed model call worth retrying? Yes for timeouts, lost connections, rate limits (429) and server
+    errors (5xx); no for other HTTP errors, such as a bad request or a wrong API key."""
+    code = getattr(error, "code", None)                                      # only HTTP errors have a status code
+    return code is None or code == 429 or code >= 500
+
+
 def next_step(trace: list[dict]) -> int:
     """The number of the next step in a trace. Steps keep counting across tries, so every try samples differently."""
     return trace[-1]["step"] + 1 if trace else 1

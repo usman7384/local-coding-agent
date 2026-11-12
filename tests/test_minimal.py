@@ -1,5 +1,6 @@
 """Tests for the harness itself. Tests marked needs_docker need Docker and the sandbox image."""
 
+import io
 import json
 import shutil
 import subprocess
@@ -289,3 +290,24 @@ def test_critic_switch_rejects_only_with_a_failing_assert(tmp_path, monkeypatch)
     assert [s["action"] for s in trace] == ["edit", "done", "REVIEW", "RETRY", "done"]
     assert trace[2]["result"].startswith("REJECT: from a import x") and seen[2][1] == ["reject"]
     assert "a reviewer rejected the change" in seen[3][0][1]["content"]              # the lesson carries the reason
+
+
+def test_gateway_retries_transient_failures_only(monkeypatch):
+    calls = []
+    answer = {"choices": [{"message": {"content": "ok"}}], "usage": {"prompt_tokens": 5, "completion_tokens": 1}}
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+    def urlopen(request, timeout):
+        calls.append(request)
+        if len(calls) == 1:
+            raise agent.urllib.error.HTTPError(agent.URL, 503, "busy", {}, None)   # a server error: retried
+        return Response(json.dumps(answer).encode())
+    monkeypatch.setattr(agent.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(agent.time, "sleep", lambda seconds: None)
+    assert agent.ask_model([], [], seed=1) == ({"content": "ok"}, {"tokens_in": 5, "tokens_out": 1})
+    assert len(calls) == 2 and "tools" not in json.loads(calls[0].data)           # no tools: none are sent
+    assert utils.transient(agent.urllib.error.HTTPError(agent.URL, 429, "", {}, None))
+    assert not utils.transient(agent.urllib.error.HTTPError(agent.URL, 401, "", {}, None))  # a wrong key: no retry

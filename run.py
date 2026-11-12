@@ -17,7 +17,7 @@ import zlib
 from pathlib import Path
 
 import sandbox
-from agent import CRITIC, EXPLORER, MAX_TOKENS, MODEL, SERVER, THINK, run_agent
+from agent import CRITIC, EXPLORER, MAX_TOKENS, MODEL, PRICES, SERVER, THINK, run_agent
 from grade import grade
 from utils import append_jsonl, diff_dirs, provenance, read_jsonl
 
@@ -71,6 +71,7 @@ for repeat in range(args.repeats):          # all tasks once, then all tasks aga
                   "malformed": actions.count("malformed"),
                   "tokens_in": sum(s["tokens_in"] for s in trace), "tokens_out": sum(s["tokens_out"] for s in trace),
                   "seconds": round(time.time() - start, 1), **stamp, "diff": diff}
+        record["cost_usd"] = (record["tokens_in"] * PRICES[0] + record["tokens_out"] * PRICES[1]) / 1e6  # 0 locally
         (out / "traces" / f"{task.name}__r{repeat}.json").write_text(json.dumps(trace, indent=1), encoding="utf-8")
         append_jsonl(out / "results.jsonl", record)
         print(f"{task.name} repeat {repeat}: {outcome} ({record['steps']} steps, {record['seconds']}s)", flush=True)
