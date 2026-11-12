@@ -14,6 +14,7 @@ import sandbox
 from utils import match_indentation, project_file, shorten, steady, syntax_error
 
 MAX_OUTPUT = 3000     # characters of tool output shown to the model (every task file fits whole)
+DENIED = re.compile(r"\b(curl|wget|ssh|scp|sudo|pip install|git push)\b|\.ssh|id_rsa|rm -rf /(\s|$)")  # never needed
 NOTES = ".notes.md"   # the agent's plan, in the project root: outside src/, so it is never graded
 
 
@@ -69,6 +70,12 @@ def plan(workdir: Path, notes: str) -> str:
     failed. They are shown to you at every step, so keep them short."""
     (workdir / NOTES).write_text(notes, encoding="utf-8")
     return "plan saved; it is shown to you at every step."
+
+
+def guard(name: str, args: dict) -> str | None:
+    """Guardrail hook: refuse network, privilege and secret-reading commands."""
+    command = args.get("command", "") if name == "bash" else ""
+    return f"refused by a guardrail: {command!r} is not allowed here." if DENIED.search(command) else None
 
 
 def reject(workdir: Path, check: str) -> str:

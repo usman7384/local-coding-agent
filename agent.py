@@ -20,9 +20,9 @@ import urllib.request
 from pathlib import Path
 
 from grade import PYTEST
-from tools import NOTES, bash, edit, plan, reject, search, view
-from utils import (call_tool, diff_dirs, harness_step, lesson, mask, next_step, project_file, restore, sub_agent,
-                   tool_spec, transient)
+from tools import NOTES, bash, edit, guard, plan, reject, search, view
+from utils import (call_tool, diff_dirs, harness_step, lesson, mask, next_step, project_file, repeated, restore,
+                   sub_agent, tool_spec, transient)
 
 MODEL = os.environ.get("LLM_MODEL", "arh-qwen3.5-4b-8k")
 SERVER = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")      # any OpenAI-compatible chat API
@@ -39,7 +39,10 @@ PLAN = os.environ.get("AGENT_PLAN") == "1"              # a plan tool; the plan 
 COMPACT = os.environ.get("AGENT_COMPACT") == "1"        # older turns stay in view, their results shrunk
 SAMPLES = int(os.environ.get("AGENT_SAMPLES", "1"))     # best-of-N: independent samples until one passes verify
 MCP = os.environ.get("AGENT_MCP") == "1"                # the fixer's tools come from an MCP server (run.py starts it)
-SWITCHES = {"explorer": EXPLORER, "critic": CRITIC, "plan": PLAN, "compact": COMPACT, "samples": SAMPLES, "mcp": MCP}
+GUARDRAILS = os.environ.get("AGENT_GUARDRAILS") == "1"  # refuse risky commands, stop a try that repeats one call
+BUDGET = int(os.environ.get("AGENT_BUDGET", "0"))       # tokens per try (0: no budget)
+SWITCHES = {"explorer": EXPLORER, "critic": CRITIC, "plan": PLAN, "compact": COMPACT, "samples": SAMPLES, "mcp": MCP,
+            "guardrails": GUARDRAILS, "budget": BUDGET}                      # recorded with every result
 
 MAX_STEPS = 20        # each try gets at most 20 model replies
 TRIES = 2             # verify: if the visible tests fail after a try, one more try with a lesson
@@ -52,7 +55,7 @@ EXPLORER_TOOLS = [view, search]                # read-only: the explorer cannot 
 CRITIC_TOOLS = [reject]                        # the critic accepts by answering in text, or calls reject
 PROMPTS = {name: (Path(__file__).parent / "prompts" / f"{name}.txt").read_text(encoding="utf-8")
            for name in ("fixer", "explorer", "critic")}                # how each agent should behave
-HOOKS = []                                     # run before every tool call; each may refuse it (Stage 10: guardrails)
+HOOKS = [guard] if GUARDRAILS else []          # run before every tool call; each may refuse it
 
 
 def ask_model(messages: list[dict], tools: list, seed: int) -> tuple[dict, dict]:
@@ -107,9 +110,10 @@ def run_agent(bug_report: str, workdir: Path, seed: int, original: Path, tools: 
 
 
 def loop(system: str, task: str, workdir: Path, tools: list, seed: int, first: int, max_steps: int = MAX_STEPS) -> list[dict]:
-    """The agent loop: the model calls tools until it answers without one ("done") or runs out of steps. Returns the
-    trace, one entry per tool call; the reply's text and tokens go with its first call."""
-    tools, turns, trace, opened = {t.__name__: t for t in tools}, [], [], []
+    """The agent loop: the model calls tools until it answers without one ("done"), runs out of steps, or a guardrail
+    stops it. Returns the trace, one entry per tool call, each timed (a span); a reply's text, tokens and model
+    latency go with its first call."""
+    tools, turns, trace, opened, spent = {t.__name__: t for t in tools}, [], [], [], 0
     for step in range(first, first + max_steps):
         # "Open files" panel: the real, current content of the files being worked on, so nothing is edited from memory.
         files = "\n\n".join(f"{name}\n{view(workdir, name)}" for name in opened)
@@ -120,19 +124,28 @@ def loop(system: str, task: str, workdir: Path, tools: list, seed: int, first: i
         messages = [{"role": "system", "content": system},                      # how to behave
                     {"role": "user", "content": task}] + sum(older + turns[-KEEP_TURNS:], []) + (  # task, turns,
                    [{"role": "user", "content": panel}] if panel else [])                        # plan and files
+        started = time.time()
         message, tokens = ask_model(messages, list(tools.values()), seed=seed * 100 + step)  # same seed, same sampling
+        usage = {**tokens, "model_ms": round(1000 * (time.time() - started))}   # span: tokens and latency of the call
         reply, calls = message.get("content") or "", message.get("tool_calls") or []
         if not calls:
-            return trace + [{"step": step, "reply": reply, "action": "done", **tokens}]
+            return trace + [{"step": step, "reply": reply, "action": "done", **usage}]
         turn = [{"role": "assistant", "content": reply, "tool_calls": calls}]
         for i, call in enumerate(calls):                                    # a reply may call several tools
+            started = time.time()
             name, args, result = call_tool(tools, workdir, call, HOOKS)
             trace.append({"step": step, "reply": "" if i else reply, "action": name, "args": args, "result": result,
-                          **(dict.fromkeys(tokens, 0) if i else tokens)})
+                          "tool_ms": round(1000 * (time.time() - started)), **(dict.fromkeys(usage, 0) if i else usage)})
             turn.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": result})
             path = str(args.get("path", "")) if name in ("view", "edit") else ""   # the file this call touched
             opened = ([f for f in opened if f != path] + [path])[-OPEN_FILES:] if project_file(workdir, path) else opened
         turns.append(turn)                                                  # a turn = the reply and its results
+        spent += tokens["tokens_in"] + tokens["tokens_out"]
+        stops = {"the token budget is spent": BUDGET and spent > BUDGET,           # guardrails that end a try early
+                 "the same call 3 times in a row": GUARDRAILS and repeated(trace)}
+        stop = next((why for why, hit in stops.items() if hit), None)
+        if stop:
+            return trace + [{"step": step, "action": "STOP", "result": stop, "tokens_in": 0, "tokens_out": 0}]
     return trace
 
 

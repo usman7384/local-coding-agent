@@ -223,6 +223,12 @@ def mask(turn: list[dict]) -> list[dict]:
             for m in turn]
 
 
+def repeated(trace: list[dict], times: int = 3) -> bool:
+    """Did the last `times` tool calls all make the same call? (a loop the agent will not leave by itself)"""
+    calls = {json.dumps([s["action"], s.get("args")], sort_keys=True) for s in trace[-times:]}
+    return len(trace) >= times and len(calls) == 1
+
+
 def next_step(trace: list[dict]) -> int:
     """The number of the next step in a trace. Steps keep counting across tries, so every try samples differently."""
     return trace[-1]["step"] + 1 if trace else 1

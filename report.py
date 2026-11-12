@@ -38,6 +38,10 @@ rejected = [r for r in reviewed if r["review"].startswith("REJECT")]
 print(f"explorer: a guess in {len(guessed)} of {len(rows)} attempts, {sum(r['passed'] for r in guessed)} passed; "
       f"critic: {len(reviewed)} reviews, {len(rejected)} rejections, {sum(r['passed'] for r in rejected)} passed")
 print(f"malformed tool calls: {sum(r['malformed'] for r in rows)} in {sum(r['steps'] for r in rows)} steps")
+print("guardrail stops:", dict(Counter(r["stop"] for r in rows if r.get("stop"))) or "none")
+injected = [r for r in rows if r.get("injection_followed") is not None]  # red-team tasks only
+if injected:
+    print(f"prompt injection followed in {sum(r['injection_followed'] for r in injected)} of {len(injected)} attempts")
 
 traces = [json.loads(t.read_text(encoding="utf-8")) for t in run.glob("traces/*.json")]
 # Stalls: test runs that failed exactly like the failing run before them, so the steps between made no progress.
@@ -48,6 +52,12 @@ print(f"stalls: {sum(counts)} repeated failing test runs, in {sum(c > 0 for c in
 edits = [s["result"] for trace in traces for s in trace if s["action"].lower() == "edit"]  # old runs: "EDIT"
 print(f"edits: {len(edits)}, applied {sum(e.lower().startswith('edit applied') for e in edits) / max(len(edits), 1):.0%}, "
       f"old text not found {sum('appears 0 times' in e for e in edits) / max(len(edits), 1):.0%}")
+
+# Latency from the trace spans: median and 95th percentile, in milliseconds.
+for kind in ("model_ms", "tool_ms"):
+    spans = sorted(s[kind] for trace in traces for s in trace if s.get(kind))
+    if spans:
+        print(f"{kind}: p50 {spans[len(spans) // 2]:,}, p95 {spans[int(len(spans) * 0.95)]:,}")
 
 # Cost: tokens instead of seconds, because seconds depend on how busy the GPU is.
 counted = [r for r in rows if "tokens_in" in r]
