@@ -5,7 +5,8 @@ model answers with tool calls, which run (tools.py) and go back into the convers
 ends the try. Then the harness runs the visible tests itself (verify); if they fail, one more try starts with a
 fresh conversation and a lesson from the failed one.
 
-Sub-agents are the same loop with their own prompt and tools. Two are switches, off by default:
+Sub-agents are the same loop with their own prompt and tools. Every component beyond the core loop is a switch,
+off by default (the README lists them all), for example:
 - AGENT_EXPLORER=1: before the first try, a read-only explorer (view, search) says where the bug is.
 - AGENT_CRITIC=1:   after a try whose tests pass, a critic reads the fix and may reject it with an assert that runs.
 """
@@ -37,7 +38,8 @@ CRITIC = os.environ.get("AGENT_CRITIC") == "1"
 PLAN = os.environ.get("AGENT_PLAN") == "1"              # a plan tool; the plan is shown at every step
 COMPACT = os.environ.get("AGENT_COMPACT") == "1"        # older turns stay in view, their results shrunk
 SAMPLES = int(os.environ.get("AGENT_SAMPLES", "1"))     # best-of-N: independent samples until one passes verify
-SWITCHES = {"explorer": EXPLORER, "critic": CRITIC, "plan": PLAN, "compact": COMPACT, "samples": SAMPLES}  # recorded
+MCP = os.environ.get("AGENT_MCP") == "1"                # the fixer's tools come from an MCP server (run.py starts it)
+SWITCHES = {"explorer": EXPLORER, "critic": CRITIC, "plan": PLAN, "compact": COMPACT, "samples": SAMPLES, "mcp": MCP}
 
 MAX_STEPS = 20        # each try gets at most 20 model replies
 TRIES = 2             # verify: if the visible tests fail after a try, one more try with a lesson
@@ -50,6 +52,7 @@ EXPLORER_TOOLS = [view, search]                # read-only: the explorer cannot 
 CRITIC_TOOLS = [reject]                        # the critic accepts by answering in text, or calls reject
 PROMPTS = {name: (Path(__file__).parent / "prompts" / f"{name}.txt").read_text(encoding="utf-8")
            for name in ("fixer", "explorer", "critic")}                # how each agent should behave
+HOOKS = []                                     # run before every tool call; each may refuse it (Stage 10: guardrails)
 
 
 def ask_model(messages: list[dict], tools: list, seed: int) -> tuple[dict, dict]:
@@ -73,7 +76,7 @@ def ask_model(messages: list[dict], tools: list, seed: int) -> tuple[dict, dict]
     return answer["choices"][0]["message"], {"tokens_in": usage["prompt_tokens"], "tokens_out": usage["completion_tokens"]}
 
 
-def run_agent(bug_report: str, workdir: Path, seed: int, original: Path) -> list[dict]:
+def run_agent(bug_report: str, workdir: Path, seed: int, original: Path, tools: list = FIXER_TOOLS) -> list[dict]:
     """Up to SAMPLES independent samples (best-of-N), each from the original code, until one is accepted. A sample is
     up to TRIES tries, each verified by the visible tests (and, with the critic on, a review). After a failed try the
     next starts with a fresh conversation whose bug report carries a lesson: what the failed try changed, and how
@@ -89,7 +92,7 @@ def run_agent(bug_report: str, workdir: Path, seed: int, original: Path) -> list
             trace.append(harness_step(trace, "SAMPLE"))
         lessons = ""
         for attempt in range(1, TRIES + 1):                # steps keep counting, so every try samples differently
-            trace += loop(PROMPTS["fixer"], bug_report + lessons, workdir, FIXER_TOOLS, seed, next_step(trace))
+            trace += loop(PROMPTS["fixer"], bug_report + lessons, workdir, tools, seed, next_step(trace))
             check = bash(workdir, PYTEST + "tests/test_visible.py")            # verify: do not take "done" on trust
             green, diff = check.startswith("exit code 0"), diff_dirs(original, workdir / "src")
             if green and CRITIC and attempt < TRIES:                            # green tests: the critic reads the fix
@@ -123,7 +126,7 @@ def loop(system: str, task: str, workdir: Path, tools: list, seed: int, first: i
             return trace + [{"step": step, "reply": reply, "action": "done", **tokens}]
         turn = [{"role": "assistant", "content": reply, "tool_calls": calls}]
         for i, call in enumerate(calls):                                    # a reply may call several tools
-            name, args, result = call_tool(tools, workdir, call)
+            name, args, result = call_tool(tools, workdir, call, HOOKS)
             trace.append({"step": step, "reply": "" if i else reply, "action": name, "args": args, "result": result,
                           **(dict.fromkeys(tokens, 0) if i else tokens)})
             turn.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": result})

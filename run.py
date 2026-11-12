@@ -8,6 +8,7 @@ Finished attempts are skipped, so an interrupted run can simply be started again
 """
 
 import argparse
+import contextlib
 import json
 import shutil
 import sys
@@ -17,9 +18,9 @@ import zlib
 from pathlib import Path
 
 import sandbox
-from agent import MAX_TOKENS, MODEL, PRICES, SERVER, SWITCHES, THINK, run_agent
+from agent import FIXER_TOOLS, MAX_TOKENS, MCP, MODEL, PRICES, SERVER, SWITCHES, THINK, run_agent
 from grade import grade
-from utils import append_jsonl, diff_dirs, provenance, read_jsonl
+from utils import append_jsonl, diff_dirs, mcp_session, provenance, read_jsonl
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--run-id", default="baseline")
@@ -53,7 +54,9 @@ for repeat in range(args.repeats):          # all tasks once, then all tasks aga
         start = time.time()
 
         docker_ok()                                                # never blame the agent for a broken Docker
-        trace = run_agent((task / "prompt.txt").read_text(encoding="utf-8"), workdir, seed, task / "repo" / "src")
+        server = [sys.executable, "mcp_server.py", str(workdir)]       # with MCP: one tool server per attempt
+        with (mcp_session(server) if MCP else contextlib.nullcontext(FIXER_TOOLS)) as tools:
+            trace = run_agent((task / "prompt.txt").read_text(encoding="utf-8"), workdir, seed, task / "repo" / "src", tools)
         diff = diff_dirs(task / "repo" / "src", workdir / "src")    # what the agent changed
         result = grade(task, workdir)
         shutil.rmtree(workdir, ignore_errors=True)

@@ -344,3 +344,16 @@ def test_best_of_n_starts_each_sample_from_the_original_code(tmp_path, monkeypat
     trace = agent.run_agent("Fix it.", work, seed=1, original=original)
     assert [s["action"] for s in trace] == ["edit", "done", "RETRY", "done", "SAMPLE", "edit", "done"]
     assert (work / "src" / "a.py").read_text() == "x = 3\n"         # "x = 1" was there again: a fresh sample
+
+
+def test_mcp_server_serves_the_tools_and_hooks_can_refuse_a_call(tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n")
+    with utils.mcp_session([sys.executable, str(TASK.parents[1] / "mcp_server.py"), str(tmp_path)]) as found:
+        served = {t.__name__: t for t in found}
+        assert list(served) == ["bash", "view", "search", "edit"]                 # discovered, not hard-coded
+        assert utils.tool_spec(served["view"])["function"]["parameters"]["required"] == ["path"]
+        assert served["view"](tmp_path, path="a.py") == "   1| x = 1"              # the call runs on the server
+        call = {"function": {"name": "view", "arguments": '{"path": "a.py"}'}}
+        assert utils.call_tool(served, tmp_path, call)[2] == "   1| x = 1"
+        refuse = lambda name, args: "refused: no viewing today"  # noqa: E731
+        assert utils.call_tool(served, tmp_path, call, [refuse])[2] == "refused: no viewing today"  # a hook said no

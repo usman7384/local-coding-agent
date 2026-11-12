@@ -1,8 +1,10 @@
 """Small helpers used by the harness. Nothing in here decides what the agent does; it just keeps the main files short."""
 
 import ast
+import contextlib
 import difflib
 import inspect
+import itertools
 import json
 import random
 import re
@@ -148,7 +150,10 @@ def docstrings(test_source: str) -> dict[str, str]:
 
 def tool_spec(tool) -> dict:
     """A tool function as the chat API describes a tool: its name, its docstring, and its arguments after `workdir`
-    (str -> string, int -> integer; arguments without a default are required)."""
+    (str -> string, int -> integer; arguments without a default are required). A tool served over MCP brings its
+    own description (`.spec`)."""
+    if hasattr(tool, "spec"):
+        return tool.spec
     args = list(inspect.signature(tool).parameters.values())[1:]
     kinds = {str: "string", int: "integer"}
     return {"type": "function", "function": {
@@ -157,10 +162,10 @@ def tool_spec(tool) -> dict:
                        "required": [a.name for a in args if a.default is a.empty]}}}
 
 
-def call_tool(tools: dict, workdir: Path, call: dict) -> tuple[str, dict, str]:
+def call_tool(tools: dict, workdir: Path, call: dict, hooks: list = ()) -> tuple[str, dict, str]:
     """Run one tool call from the model: (tool name, arguments, result). A call to an unknown tool, or with
     arguments that are not JSON or do not fit the tool, runs nothing and is returned as "malformed", with a result
-    the model can read and correct."""
+    the model can read and correct. Every hook sees the call first and may refuse it (its message is the result)."""
     name, raw = call["function"]["name"], call["function"].get("arguments") or "{}"
     try:
         args = json.loads(raw) if isinstance(raw, str) else raw
@@ -168,7 +173,39 @@ def call_tool(tools: dict, workdir: Path, call: dict) -> tuple[str, dict, str]:
     except (KeyError, TypeError, ValueError):
         note = f"Nothing was run: {name}({raw}) is not a valid call. The tools are: {', '.join(tools)}."
         return "malformed", {"tool": name, "arguments": raw}, note
-    return name, args, tools[name](workdir, **args)
+    refusal = next(filter(None, (hook(name, args) for hook in hooks)), None)   # pre-call hooks, e.g. guardrails
+    return name, args, refusal or tools[name](workdir, **args)
+
+
+@contextlib.contextmanager
+def mcp_session(command: list[str]):
+    """Start an MCP server (stdio transport: JSON-RPC 2.0, one message per line), discover its tools, and yield them
+    as functions the agent loop can call, each with the server's own description as `.spec`. Stops it afterwards."""
+    server = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8")
+    ids = itertools.count(1)
+
+    def rpc(method: str, params: dict, request: bool = True):
+        """Send a request (or a notification, which gets no answer) and return its result."""
+        server.stdin.write(json.dumps({"jsonrpc": "2.0", "method": method, "params": params,
+                                       **({"id": next(ids)} if request else {})}) + "\n")
+        server.stdin.flush()
+        return json.loads(server.stdout.readline())["result"] if request else None
+
+    def proxy(tool: dict):
+        """A local stand-in for one server tool: same name, the server's schema, calls forwarded to the server."""
+        def forward(workdir: Path, **args) -> str:
+            return rpc("tools/call", {"name": tool["name"], "arguments": args})["content"][0]["text"]
+        forward.__name__, forward.spec = tool["name"], {"type": "function", "function": {
+            "name": tool["name"], "description": tool.get("description", ""), "parameters": tool["inputSchema"]}}
+        return forward
+
+    try:
+        rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "agent", "version": "1"}})
+        rpc("notifications/initialized", {}, request=False)
+        yield [proxy(tool) for tool in rpc("tools/list", {})["tools"]]
+    finally:
+        server.stdin.close()                                                 # the server stops at the end of input
+        server.wait(timeout=30)
 
 
 def transient(error: Exception) -> bool:
