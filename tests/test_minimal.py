@@ -376,3 +376,27 @@ def test_token_budget_ends_a_try(tmp_path, monkeypatch):
     fake_model(monkeypatch, [call("search", text="a"), call("search", text="b"), answer()])
     trace = agent.loop("Fix it.", "The bug.", tmp_path, [tools.search], seed=1, first=1)
     assert [s["action"] for s in trace] == ["search", "search", "STOP"] and trace[-1]["result"] == "the token budget is spent"
+
+
+def test_memory_joins_the_bug_report_and_promotion_needs_a_held_out_gain(tmp_path, monkeypatch):
+    (tmp_path / "lessons.md").write_text("- Check every documented example before calling a fix done.")
+    (tmp_path / "src").mkdir()
+    seen = []
+    fake_model(monkeypatch, [answer()], seen)
+    monkeypatch.setattr(tools.sandbox, "run", lambda workdir, command: (0, "1 passed"))
+    monkeypatch.setattr(agent, "MEMORY", str(tmp_path / "lessons.md"))
+    agent.run_agent("Fix it.", tmp_path, seed=1, original=tmp_path / "src")
+    assert "Lessons from earlier runs" in seen[0][0][1]["content"] and "documented example" in seen[0][0][1]["content"]
+    held = (TASK.parents[1] / "tasks" / "held_out.txt").read_text().split()
+    for run, passed in (("without", False), ("with", True)):                    # the candidate helps on every task
+        (tmp_path / run).mkdir()
+        rows = [{"task": t, "repeat": r, "passed": passed} for t in held for r in range(3)]
+        (tmp_path / run / "results.jsonl").write_text("\n".join(map(json.dumps, rows)))
+    (tmp_path / "memory").mkdir()
+    (tmp_path / "memory" / "candidate.md").write_text("- new lesson")
+    learn = lambda *runs: subprocess.run(  # noqa: E731
+        [sys.executable, "learn.py", "--promote", "--memory", str(tmp_path / "memory"), *map(str, runs)],
+        capture_output=True, text=True, cwd=TASK.parents[1]).stdout
+    assert "kept the current lessons" in learn(tmp_path / "with", tmp_path / "without")      # worse: not promoted
+    assert "promoted" in learn(tmp_path / "without", tmp_path / "with")
+    assert (tmp_path / "memory" / "lessons.md").read_text() == "- new lesson"

@@ -1,0 +1,3 @@
+You improve a coding agent's playbook. You get the current lessons (if any) and graded attempts at fixing bugs in small Python projects: the outcome of each (passed, wrong_fix: the visible tests passed but hidden tests failed, ran_out_of_steps) and the change it made.
+
+Write at most 8 lessons that would help the agent on bugs it has not seen. Each lesson is one line, general (no task, file or function names), and about how to work: what to check before calling a fix done, how to find the real cause, what to avoid. Keep a current lesson only if the attempts still support it. Answer with the lessons only, one per line, each starting with "- ".

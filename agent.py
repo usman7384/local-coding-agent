@@ -41,8 +41,9 @@ SAMPLES = int(os.environ.get("AGENT_SAMPLES", "1"))     # best-of-N: independent
 MCP = os.environ.get("AGENT_MCP") == "1"                # the fixer's tools come from an MCP server (run.py starts it)
 GUARDRAILS = os.environ.get("AGENT_GUARDRAILS") == "1"  # refuse risky commands, stop a try that repeats one call
 BUDGET = int(os.environ.get("AGENT_BUDGET", "0"))       # tokens per try (0: no budget)
+MEMORY = os.environ.get("AGENT_MEMORY", "")             # a lessons file from learn.py, added to the bug report
 SWITCHES = {"explorer": EXPLORER, "critic": CRITIC, "plan": PLAN, "compact": COMPACT, "samples": SAMPLES, "mcp": MCP,
-            "guardrails": GUARDRAILS, "budget": BUDGET}                      # recorded with every result
+            "guardrails": GUARDRAILS, "budget": BUDGET, "memory": MEMORY}    # recorded with every result
 
 MAX_STEPS = 20        # each try gets at most 20 model replies
 TRIES = 2             # verify: if the visible tests fail after a try, one more try with a lesson
@@ -54,7 +55,7 @@ FIXER_TOOLS = [bash, view, search, edit] + ([plan] if PLAN else [])
 EXPLORER_TOOLS = [view, search]                # read-only: the explorer cannot change anything
 CRITIC_TOOLS = [reject]                        # the critic accepts by answering in text, or calls reject
 PROMPTS = {name: (Path(__file__).parent / "prompts" / f"{name}.txt").read_text(encoding="utf-8")
-           for name in ("fixer", "explorer", "critic")}                # how each agent should behave
+           for name in ("fixer", "explorer", "critic", "learner")}     # how each agent should behave
 HOOKS = [guard] if GUARDRAILS else []          # run before every tool call; each may refuse it
 
 
@@ -88,6 +89,8 @@ def run_agent(bug_report: str, workdir: Path, seed: int, original: Path, tools: 
     if trace and trace[0]["result"]:
         bug_report += (f"\n\nA read-only explorer looked at the code first. Its guess: {trace[0]['result']}\n"
                        "Check it yourself before you edit.")
+    if MEMORY:                                                                  # opt-in memory across tasks
+        bug_report += f"\n\nLessons from earlier runs (general advice):\n{Path(MEMORY).read_text(encoding='utf-8')}"
     for sample in range(SAMPLES):
         if sample:                                         # best-of-N: the next sample starts from the original code
             restore(original, workdir / "src")
