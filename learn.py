@@ -37,7 +37,7 @@ else:                               # distil: failures teach most, a few passes 
     shown = [r for r in rows if not r["passed"]][:20] + [r for r in rows if r["passed"]][:10]
     current = (memory / "lessons.md").read_text(encoding="utf-8") if (memory / "lessons.md").exists() else "(none)"
     attempts = "\n\n".join(f"{r['task']}: {r['outcome']}\n{shorten(r['diff'], 400)}" for r in shown)
-    message, _ = ask_model([{"role": "system", "content": PROMPTS["learner"]},
-                            {"role": "user", "content": f"Current lessons:\n{current}\n\nAttempts:\n\n{attempts}"}], [], seed=0)
+    task = f"Current lessons:\n{current}\n\nAttempts:\n\n{attempts}"
+    message, _ = ask_model([{"role": "system", "content": PROMPTS["learner"]}, {"role": "user", "content": task}], [], 0)
     (memory / "candidate.md").write_text(message.get("content") or "", encoding="utf-8")
     print(message.get("content"))

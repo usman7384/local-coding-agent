@@ -16,8 +16,8 @@ from pathlib import Path
 
 from grade import PYTEST
 from tools import NOTES, bash, edit, guard, plan, reject, search, view
-from utils import (call_tool, diff_dirs, harness_step, lesson, mask, next_step, project_file, repeated, restore,
-                   sub_agent, tool_spec, transient)
+from utils import (call_tool, changed, copy_back, diff_dirs, harness_step, lesson, mask, next_step, project_file,
+                   repeated, sub_agent, tool_spec, transient)
 
 MODEL = os.environ.get("LLM_MODEL", "arh-qwen3.5-4b-8k")
 SERVER = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")      # any OpenAI-compatible chat API
@@ -36,8 +36,8 @@ MCP = os.environ.get("AGENT_MCP") == "1"                # the fixer's tools come
 GUARDRAILS = os.environ.get("AGENT_GUARDRAILS") == "1"  # refuse risky commands, stop repeated calls
 BUDGET = int(os.environ.get("AGENT_BUDGET", "0"))       # tokens per try (0 = no limit)
 MEMORY = os.environ.get("AGENT_MEMORY", "")             # a lessons file (learn.py) added to the bug report
-SWITCHES = {"explorer": EXPLORER, "critic": CRITIC, "plan": PLAN, "compact": COMPACT, "samples": SAMPLES, "mcp": MCP,
-            "guardrails": GUARDRAILS, "budget": BUDGET, "memory": MEMORY}    # recorded with every result
+SWITCHES = {"explorer": EXPLORER, "critic": CRITIC, "plan": PLAN, "compact": COMPACT, "samples": SAMPLES,
+            "mcp": MCP, "guardrails": GUARDRAILS, "budget": BUDGET, "memory": MEMORY}  # recorded with every result
 
 MAX_STEPS = 20        # model replies per try
 TRIES = 2             # verify: one more try with a lesson if the visible tests fail
@@ -71,7 +71,8 @@ def ask_model(messages: list[dict], tools: list, seed: int) -> tuple[dict, dict]
                 raise
             time.sleep(wait)
     usage = answer["usage"]
-    return answer["choices"][0]["message"], {"tokens_in": usage["prompt_tokens"], "tokens_out": usage["completion_tokens"]}
+    return answer["choices"][0]["message"], {"tokens_in": usage["prompt_tokens"],
+                                             "tokens_out": usage["completion_tokens"]}
 
 
 def run_agent(bug_report: str, workdir: Path, seed: int, original: Path, tools: list = FIXER_TOOLS,
@@ -86,7 +87,7 @@ def run_agent(bug_report: str, workdir: Path, seed: int, original: Path, tools: 
         bug_report += f"\n\nLessons from earlier runs (general advice):\n{Path(MEMORY).read_text(encoding='utf-8')}"
     for sample in range(SAMPLES):
         if sample:                                                      # a fresh sample: the original code again
-            restore(original, workdir / code)
+            copy_back(changed(original, workdir / code), original, workdir / code)
             (workdir / NOTES).unlink(missing_ok=True)
             trace.append(harness_step(trace, "SAMPLE"))
         lessons = ""
@@ -96,7 +97,8 @@ def run_agent(bug_report: str, workdir: Path, seed: int, original: Path, tools: 
             green, diff = check.startswith("exit code 0"), diff_dirs(original, workdir / code)
             if green and CRITIC and attempt < TRIES:
                 trace.append(critique(bug_report, workdir, diff, seed + 2, next_step(trace), code))
-            rejected = trace[-1]["result"] if trace[-1]["action"] == "REVIEW" and trace[-1]["result"] != "ACCEPT" else ""
+            review = trace[-1]["result"] if trace[-1]["action"] == "REVIEW" else "ACCEPT"
+            rejected = "" if review == "ACCEPT" else review
             if green and not rejected:
                 return trace
             if attempt < TRIES:
@@ -105,13 +107,14 @@ def run_agent(bug_report: str, workdir: Path, seed: int, original: Path, tools: 
     return trace
 
 
-def loop(system: str, task: str, workdir: Path, tools: list, seed: int, first: int, max_steps: int = MAX_STEPS) -> list[dict]:
+def loop(system: str, task: str, workdir: Path, tools: list, seed: int, first: int,
+         max_steps: int = MAX_STEPS) -> list[dict]:
     """The agent loop: tool calls until a reply without one ("done"), the step limit, or a guardrail stop.
     Returns one timed trace entry per tool call; a reply's text, tokens and latency go with its first call."""
     tools, turns, trace, opened, spent = {t.__name__: t for t in tools}, [], [], [], 0
     for step in range(first, first + max_steps):
         files = "\n\n".join(f"{name}\n{view(workdir, name)}" for name in opened)    # fresh from disk, not memory
-        notes = (workdir / NOTES).read_text(encoding="utf-8") if "plan" in tools and (workdir / NOTES).exists() else ""
+        notes = (workdir / NOTES).read_text(encoding="utf-8") if (workdir / NOTES).exists() else ""
         panel = (f"Your plan and notes:\n{notes}\n\n" if notes else "") + (
             f"Current content of the files you are working on:\n\n{files}" if opened else "")
         older = [mask(turn) for turn in turns[:-KEEP_TURNS]] if COMPACT else []   # compaction: shrink, not drop
@@ -131,7 +134,8 @@ def loop(system: str, task: str, workdir: Path, tools: list, seed: int, first: i
                           "tool_ms": round(1000 * (time.time() - started)), **(dict.fromkeys(usage, 0) if i else usage)})
             turn.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": result})
             path = str(args.get("path", "")) if name in ("view", "edit") else ""
-            opened = ([f for f in opened if f != path] + [path])[-OPEN_FILES:] if project_file(workdir, path) else opened
+            if project_file(workdir, path):                             # the most recent files stay open
+                opened = ([f for f in opened if f != path] + [path])[-OPEN_FILES:]
         turns.append(turn)
         spent += tokens["tokens_in"] + tokens["tokens_out"]
         stops = {"the token budget is spent": BUDGET and spent > BUDGET,
@@ -145,7 +149,7 @@ def loop(system: str, task: str, workdir: Path, tools: list, seed: int, first: i
 def explore(bug_report: str, workdir: Path, seed: int, test: str = TEST) -> dict:
     """The explorer sub-agent: read-only tools, a fresh conversation, the failing tests; answers where the bug is."""
     tests = bash(workdir, test)
-    steps = loop(PROMPTS["explorer"], f"{bug_report}\n\nThe visible tests now:\n{tests}", workdir, EXPLORER_TOOLS, seed,
+    steps = loop(PROMPTS["explorer"], f"{bug_report}\n\nThe tests now:\n{tests}", workdir, EXPLORER_TOOLS, seed,
                  first=1, max_steps=EXPLORER_STEPS)
     return sub_agent(0, "EXPLORE", steps[-1]["reply"].strip() if steps[-1]["action"] == "done" else "", steps)
 
@@ -157,4 +161,5 @@ def critique(bug_report: str, workdir: Path, diff: str, seed: int, step: int, co
     steps = loop(PROMPTS["critic"], f"{bug_report}\n\nThe fix:\n{diff}\n\nThe changed files now:\n\n{files}", workdir,
                  CRITIC_TOOLS, seed, first=1, max_steps=1)
     proof = next((s for s in steps if s["action"] == "reject" and "AssertionError" in s["result"]), None)
-    return sub_agent(step, "REVIEW", f"REJECT: {proof['args']['check']}\n{proof['result']}" if proof else "ACCEPT", steps)
+    verdict = f"REJECT: {proof['args']['check']}\n{proof['result']}" if proof else "ACCEPT"
+    return sub_agent(step, "REVIEW", verdict, steps)

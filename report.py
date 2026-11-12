@@ -66,6 +66,6 @@ if counted:
     per_success = f"{tokens / wins:,.0f} per success" if wins else "no successes to divide by"
     print(f"tokens: {tokens / len(counted):,.0f} per attempt, {per_success}")
 cost = sum(r.get("cost_usd", 0) for r in rows)                          # API models only; local models cost 0
-print(f"cost: ${cost:,.2f}, ${cost / max(sum(r['passed'] for r in rows), 1):,.3f} per success" if cost else "cost: $0 (local)")
+print(f"cost: ${cost:,.2f}, ${cost / max(wins, 1):,.3f} per success")
 print("code and model:", sorted({(r.get("commit", "?"), r.get("model_digest", "?")) for r in rows}))
 print("for confidence intervals and the noise band: python stats.py", sys.argv[1])

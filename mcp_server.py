@@ -27,8 +27,9 @@ def call(params: dict) -> dict:
 METHODS = {
     "initialize": lambda params: {"protocolVersion": params.get("protocolVersion", "2025-06-18"),
                                   "capabilities": {"tools": {}}, "serverInfo": {"name": "agent-tools", "version": "1"}},
-    "tools/list": lambda params: {"tools": [{"name": s["name"], "description": s["description"], "inputSchema": s["parameters"]}
-                                            for s in (tool_spec(t)["function"] for t in tools.values())]},
+    "tools/list": lambda params: {"tools": [
+        {"name": s["name"], "description": s["description"], "inputSchema": s["parameters"]}
+        for s in (tool_spec(t)["function"] for t in tools.values())]},
     "tools/call": call,
 }
 

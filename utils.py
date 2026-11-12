@@ -1,4 +1,4 @@
-"""Small helpers used by the harness. Nothing in here decides what the agent does; it just keeps the main files short."""
+"""Small helpers that keep the main files short. Nothing here decides what the agent does."""
 
 import ast
 import contextlib
@@ -85,9 +85,12 @@ def copy_back(names: list[str], source: Path, target: Path) -> None:
 
 def diff_dirs(before: Path, after: Path) -> str:
     """A unified diff of every file that differs between two folders."""
-    read = lambda p: p.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True) if p.exists() else []  # noqa: E731
-    return "".join(line for name in changed(before, after)
-                   for line in difflib.unified_diff(read(before / name), read(after / name), f"a/{name}", f"b/{name}"))
+    diff = []
+    for name in changed(before, after):
+        old, new = ((root / name).read_text(encoding="utf-8", errors="replace").splitlines(True)
+                    if (root / name).exists() else [] for root in (before, after))
+        diff += difflib.unified_diff(old, new, f"a/{name}", f"b/{name}")
+    return "".join(diff)
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -217,7 +220,8 @@ def mcp_session(command: list[str]):
         return forward
 
     try:
-        rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "agent", "version": "1"}})
+        rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                           "clientInfo": {"name": "agent", "version": "1"}})
         rpc("notifications/initialized", {}, request=False)
         yield [proxy(tool) for tool in rpc("tools/list", {})["tools"]]
     finally:
@@ -232,7 +236,7 @@ def transient(error: Exception) -> bool:
 
 
 def mask(turn: list[dict]) -> list[dict]:
-    """Observation masking: an old turn keeps its reply and calls; each result shrinks to its first line and failures."""
+    """Observation masking: an old turn keeps its reply and calls; results shrink to a line and the failures."""
     return [{**m, "content": "\n".join(filter(None, [m["content"].split("\n")[0], fingerprint(m["content"]),
                                                      "[older result shortened]"]))} if m["role"] == "tool" else m
             for m in turn]
@@ -254,11 +258,6 @@ def harness_step(trace: list[dict], action: str, result: str = "") -> dict:
     return {"step": next_step(trace), "action": action, "result": result, "tokens_in": 0, "tokens_out": 0}
 
 
-def restore(original: Path, code: Path) -> None:
-    """Put the original code back for a fresh sample (installed packages stay)."""
-    copy_back(changed(original, code), original, code)
-
-
 def sub_agent(step: int, action: str, result: str, steps: list[dict]) -> dict:
     """One trace entry for a sub-agent's run: its answer, its steps, their tokens."""
     return {"step": step, "action": action, "result": result, "steps": steps,
@@ -277,11 +276,11 @@ def stalls(trace: list[dict]) -> int:
 
 
 def lesson(attempt: int, diff: str, check: str, rejected: str = "") -> str:
-    """A lesson from a failed try, for the next one: what it changed in src/, and how the visible tests still fail
-    or, if they passed, why the critic rejected the change."""
-    change = (f"It changed src/ like this, and the files still contain that change:\n{shorten(diff, 800)}" if diff
-              else "It left src/ unchanged: its edits failed or were undone.")
-    why = (f"The visible tests pass, but a reviewer rejected the change:\n{shorten(rejected, 600)}" if rejected
-           else f"The visible tests still fail with:\n{shorten(fingerprint(check) or check, 600)}")
+    """A lesson from a failed try for the next one: what it changed, and how the tests failed or why the critic
+    rejected the change."""
+    change = (f"It changed the code like this, and the files still contain that change:\n{shorten(diff, 800)}" if diff
+              else "It left the code unchanged: its edits failed or were undone.")
+    why = (f"The tests pass, but a reviewer rejected the change:\n{shorten(rejected, 600)}" if rejected
+           else f"The tests still fail with:\n{shorten(fingerprint(check) or check, 600)}")
     return (f"\n\nLesson from failed try {attempt} (its conversation is gone): {change}\n{why}\n"
             "Do not repeat what it tried. Find the real cause and fix it.")

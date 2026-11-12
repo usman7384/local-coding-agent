@@ -59,8 +59,9 @@ def attempt(task: Path, repeat: int) -> tuple[dict, list[dict]]:
     start = time.time()
     docker_ok()                                                    # never blame the agent for a broken Docker
     server = [sys.executable, "mcp_server.py", str(workdir)]       # with MCP: one tool server per attempt
+    report = (task / "prompt.txt").read_text(encoding="utf-8")
     with (mcp_session(server) if MCP else contextlib.nullcontext(FIXER_TOOLS)) as tools:
-        trace = run_agent((task / "prompt.txt").read_text(encoding="utf-8"), workdir, seed, task / "repo" / "src", tools)
+        trace = run_agent(report, workdir, seed, task / "repo" / "src", tools)
     diff = diff_dirs(task / "repo" / "src", workdir / "src")        # what the agent changed
     result = grade(task, workdir)
     shutil.rmtree(workdir, ignore_errors=True)
@@ -73,15 +74,16 @@ def attempt(task: Path, repeat: int) -> tuple[dict, list[dict]]:
                else "wrong_fix" if said_done else "ran_out_of_steps")
     verdicts = {s["action"]: s["result"] for s in trace if s["action"] in ("EXPLORE", "REVIEW", "STOP")}
     marker = (task / "injection.txt").read_text().strip() if (task / "injection.txt").exists() else ""  # red-team
+    followed = bool(re.search(marker, json.dumps([s.get("args") for s in trace]))) if marker else None
+    tokens = [sum(s[key] for s in trace) for key in ("tokens_in", "tokens_out")]
     record = {"task": task.name, "repeat": repeat, "seed": seed, **result, "outcome": outcome,
               "steps": len({s["step"] for s in trace if s["action"] not in harness}),
               "tries": 1 + actions.count("RETRY") + actions.count("SAMPLE"), "samples": 1 + actions.count("SAMPLE"),
               "guess": verdicts.get("EXPLORE"), "review": verdicts.get("REVIEW"), "stop": verdicts.get("STOP"),
-              "malformed": actions.count("malformed"),
-              "injection_followed": bool(re.search(marker, json.dumps([s.get("args") for s in trace]))) if marker else None,
-              "tokens_in": sum(s["tokens_in"] for s in trace), "tokens_out": sum(s["tokens_out"] for s in trace),
+              "malformed": actions.count("malformed"), "injection_followed": followed,
+              "tokens_in": tokens[0], "tokens_out": tokens[1],
+              "cost_usd": (tokens[0] * PRICES[0] + tokens[1] * PRICES[1]) / 1e6,   # 0 for local models
               "seconds": round(time.time() - start, 1), **stamp, "diff": diff}
-    record["cost_usd"] = (record["tokens_in"] * PRICES[0] + record["tokens_out"] * PRICES[1]) / 1e6  # 0 locally
     return record, trace
 
 
@@ -89,7 +91,7 @@ def attempt(task: Path, repeat: int) -> tuple[dict, list[dict]]:
 jobs = [(task, repeat) for repeat in range(args.repeats) for task in tasks if (task.name, repeat) not in finished]
 with ThreadPoolExecutor(args.workers) as pool:
     for record, trace in pool.map(lambda job: attempt(*job), jobs):
-        (out / "traces" / f"{record['task']}__r{record['repeat']}.json").write_text(json.dumps(trace, indent=1), encoding="utf-8")
+        name = f"{record['task']}__r{record['repeat']}"
+        (out / "traces" / f"{name}.json").write_text(json.dumps(trace, indent=1), encoding="utf-8")
         append_jsonl(out / "results.jsonl", record)
-        print(f"{record['task']} repeat {record['repeat']}: {record['outcome']} ({record['steps']} steps, "
-              f"{record['seconds']}s)", flush=True)
+        print(f"{name}: {record['outcome']} ({record['steps']} steps, {record['seconds']}s)", flush=True)
