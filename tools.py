@@ -14,6 +14,7 @@ import sandbox
 from utils import match_indentation, project_file, shorten, steady, syntax_error
 
 MAX_OUTPUT = 3000     # characters of tool output shown to the model (every task file fits whole)
+NOTES = ".notes.md"   # the agent's plan, in the project root: outside src/, so it is never graded
 
 
 def bash(workdir: Path, command: str) -> str:
@@ -61,6 +62,13 @@ def edit(workdir: Path, path: str, old: str, new: str) -> str:
         return f"edit refused, nothing was changed: {path} would no longer be valid Python ({broken})."
     file.write_text(updated, encoding="utf-8", newline="\n")
     return f"edit applied to {path}.{note}"
+
+
+def plan(workdir: Path, notes: str) -> str:
+    """Write your plan and notes, replacing the old ones: the steps left, what you found, what you tried and why it
+    failed. They are shown to you at every step, so keep them short."""
+    (workdir / NOTES).write_text(notes, encoding="utf-8")
+    return "plan saved; it is shown to you at every step."
 
 
 def reject(workdir: Path, check: str) -> str:

@@ -19,8 +19,8 @@ import urllib.request
 from pathlib import Path
 
 from grade import PYTEST
-from tools import bash, edit, reject, search, view
-from utils import call_tool, diff_dirs, lesson, next_step, project_file, sub_agent, tool_spec, transient
+from tools import NOTES, bash, edit, plan, reject, search, view
+from utils import call_tool, diff_dirs, lesson, mask, next_step, project_file, sub_agent, tool_spec, transient
 
 MODEL = os.environ.get("LLM_MODEL", "arh-qwen3.5-4b-8k")
 SERVER = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")      # any OpenAI-compatible chat API
@@ -33,6 +33,8 @@ THINK = os.environ.get("LLM_THINK", "none")
 MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "768"))
 EXPLORER = os.environ.get("AGENT_EXPLORER") == "1"
 CRITIC = os.environ.get("AGENT_CRITIC") == "1"
+PLAN = os.environ.get("AGENT_PLAN") == "1"              # a plan tool; the plan is shown at every step
+COMPACT = os.environ.get("AGENT_COMPACT") == "1"        # older turns stay in view, their results shrunk
 
 MAX_STEPS = 20        # each try gets at most 20 model replies
 TRIES = 2             # verify: if the visible tests fail after a try, one more try with a lesson
@@ -40,7 +42,7 @@ KEEP_TURNS = 5        # the model sees the system prompt, the bug report and onl
 OPEN_FILES = 2        # the files it viewed or edited most recently are always shown, fresh from disk
 EXPLORER_STEPS = 6    # the explorer gets at most 6 replies to point at the bug
 
-FIXER_TOOLS = [bash, view, search, edit]
+FIXER_TOOLS = [bash, view, search, edit] + ([plan] if PLAN else [])
 EXPLORER_TOOLS = [view, search]                # read-only: the explorer cannot change anything
 CRITIC_TOOLS = [reject]                        # the critic accepts by answering in text, or calls reject
 PROMPTS = {name: (Path(__file__).parent / "prompts" / f"{name}.txt").read_text(encoding="utf-8")
@@ -96,9 +98,13 @@ def loop(system: str, task: str, workdir: Path, tools: list, seed: int, first: i
     for step in range(first, first + max_steps):
         # "Open files" panel: the real, current content of the files being worked on, so nothing is edited from memory.
         files = "\n\n".join(f"{name}\n{view(workdir, name)}" for name in opened)
-        panel = [{"role": "user", "content": f"Current content of the files you are working on:\n\n{files}"}] if opened else []
-        messages = [{"role": "system", "content": system},                  # how to behave
-                    {"role": "user", "content": task}] + sum(turns[-KEEP_TURNS:], []) + panel  # task, recent turns, files
+        notes = (workdir / NOTES).read_text(encoding="utf-8") if "plan" in tools and (workdir / NOTES).exists() else ""
+        panel = (f"Your plan and notes:\n{notes}\n\n" if notes else "") + (
+            f"Current content of the files you are working on:\n\n{files}" if opened else "")
+        older = [mask(turn) for turn in turns[:-KEEP_TURNS]] if COMPACT else []   # compaction: shrunk, not dropped
+        messages = [{"role": "system", "content": system},                      # how to behave
+                    {"role": "user", "content": task}] + sum(older + turns[-KEEP_TURNS:], []) + (  # task, turns,
+                   [{"role": "user", "content": panel}] if panel else [])                        # plan and files
         message, tokens = ask_model(messages, list(tools.values()), seed=seed * 100 + step)  # same seed, same sampling
         reply, calls = message.get("content") or "", message.get("tool_calls") or []
         if not calls:

@@ -311,3 +311,21 @@ def test_gateway_retries_transient_failures_only(monkeypatch):
     assert len(calls) == 2 and "tools" not in json.loads(calls[0].data)           # no tools: none are sent
     assert utils.transient(agent.urllib.error.HTTPError(agent.URL, 429, "", {}, None))
     assert not utils.transient(agent.urllib.error.HTTPError(agent.URL, 401, "", {}, None))  # a wrong key: no retry
+
+
+def test_plan_tool_keeps_the_plan_in_view(tmp_path, monkeypatch):
+    seen = []
+    fake_model(monkeypatch, [call("plan", notes="1. run the tests"), answer()], seen)
+    trace = agent.loop("Fix it.", "The bug.", tmp_path, [tools.bash, tools.plan], seed=1, first=1)
+    assert [s["action"] for s in trace] == ["plan", "done"]
+    assert "Your plan and notes:\n1. run the tests" in seen[1][0][-1]["content"]      # shown at the next step
+    assert (tmp_path / tools.NOTES).read_text() == "1. run the tests"
+
+
+def test_compaction_masks_old_results_but_keeps_decisions():
+    failing = "exit code 1\nF\nE   assert 1 == 2\nFAILED tests/test_visible.py::test_a - assert 1 == 2\n1 failed"
+    turn = [{"role": "assistant", "content": "Run the tests.", "tool_calls": []}, {"role": "tool", "content": failing}]
+    masked = utils.mask(turn)
+    assert masked[0] == turn[0]                                                   # the decision stays
+    assert masked[1]["content"].splitlines()[0] == "exit code 1" and "FAILED tests/test_visible.py::test_a" in masked[1]["content"]
+    assert "1 failed" not in masked[1]["content"] and masked[1]["content"].endswith("[older result shortened]")

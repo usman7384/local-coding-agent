@@ -177,6 +177,14 @@ def transient(error: Exception) -> bool:
     return code is None or code == 429 or code >= 500
 
 
+def mask(turn: list[dict]) -> list[dict]:
+    """Observation masking for an old turn: the model's reply and calls stay, and each tool result shrinks to its
+    first line plus the failing tests it showed, so old decisions stay in view at a fraction of the tokens."""
+    return [{**m, "content": "\n".join(filter(None, [m["content"].split("\n")[0], fingerprint(m["content"]),
+                                                     "[older result shortened]"]))} if m["role"] == "tool" else m
+            for m in turn]
+
+
 def next_step(trace: list[dict]) -> int:
     """The number of the next step in a trace. Steps keep counting across tries, so every try samples differently."""
     return trace[-1]["step"] + 1 if trace else 1
