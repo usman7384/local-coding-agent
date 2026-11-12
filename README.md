@@ -36,6 +36,23 @@ sandbox has no network. `fix.py` prints the diff and whether the tests pass, and
 repository only with `--apply` and passing tests. Turn on more components with the switches below, for example
 `AGENT_CRITIC=1 AGENT_SAMPLES=3 python fix.py ...`.
 
+## Chat with it (Open WebUI, or any chat UI)
+
+`serve.py` puts the agent behind an OpenAI-compatible chat API, so any chat UI that speaks it can use the agent as
+a model. Each message runs the agent loop on your repository; tool calls stream into the chat as they happen, and
+follow-ups see the whole conversation.
+
+```bash
+python serve.py --repo ../my-project --test "python -m pytest -q"        # http://127.0.0.1:8000/v1
+docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway --name open-webui ghcr.io/open-webui/open-webui:main
+```
+
+In Open WebUI (http://localhost:3000), add an OpenAI-compatible connection to `http://host.docker.internal:8000/v1`
+and pick the model `coding-agent`. If Open WebUI cannot reach it, start `serve.py --host 0.0.0.0 --key <secret>`
+and enter the same key in the connection. Two cautions: in chat mode the agent edits your repository in place
+(commit first; review and undo with git), and Open WebUI may send its own background requests (titles, tags) to
+the selected model, so point its task model at a plain model in its settings.
+
 ![How it works](docs/how-it-works.svg)
 
 ## Architecture
@@ -102,10 +119,11 @@ refuses to resume with different values, so one run never mixes two configuratio
 | File | What it does |
 |---|---|
 | [`fix.py`](fix.py) | Fix an issue in your own repository: a sandboxed copy, an optional setup step, the agent, the diff |
+| [`serve.py`](serve.py) | The agent behind an OpenAI-compatible chat API, for Open WebUI or your own UI; streams tool calls |
 | [`agent.py`](agent.py) | The loop, the model gateway, verify and retry, best-of-N, the explorer and the critic |
 | [`tools.py`](tools.py) | The tools as typed functions (`bash`, `view`, `search`, `edit`, `plan`, `reject`) and the guardrail hook |
 | [`sandbox.py`](sandbox.py) | One command in a fresh, locked-down Docker container |
-| [`prompts/`](prompts/) | The fixer, explorer, critic and learner prompts |
+| [`prompts/`](prompts/) | The fixer, coder (chat), explorer, critic and learner prompts |
 | [`mcp_server.py`](mcp_server.py) | The tools as an MCP server |
 | [`learn.py`](learn.py) | Distil lessons from graded runs; promote them only on a held-out gain |
 | [`run.py`](run.py) | Runs every task several times, in parallel workers if asked, and records one line per attempt plus a trace |

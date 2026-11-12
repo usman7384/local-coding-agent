@@ -415,3 +415,29 @@ def test_the_agent_works_on_any_repository_layout(tmp_path, monkeypatch):
     assert utils.changed(repo, work) == ["pkg/a.py"] and "+x = 2" in utils.diff_dirs(repo, work)
     utils.copy_back(utils.changed(repo, work), work, repo)                      # what fix.py --apply does
     assert (repo / "pkg" / "a.py").read_text() == "x = 2\n" and utils.changed(repo, work) == []
+
+
+def test_serve_speaks_the_chat_api_streams_tool_calls_and_keeps_the_conversation(tmp_path, monkeypatch):
+    import threading
+    import urllib.request
+    import serve
+    (tmp_path / "a.py").write_text("x = 1\n")
+    seen = []
+    fake_model(monkeypatch, [call("view", path="a.py"), answer("x is 1."), call("view", path="a.py"), answer("Still 1.")], seen)
+    monkeypatch.setattr(serve, "REPO", tmp_path)
+    server = serve.HTTPServer(("127.0.0.1", 0), serve.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_port}/v1"
+    post = lambda body: urllib.request.urlopen(urllib.request.Request(  # noqa: E731
+        url + "/chat/completions", json.dumps(body).encode(), {"Content-Type": "application/json"})).read().decode()
+    assert json.loads(urllib.request.urlopen(url + "/models").read())["data"][0]["id"] == "coding-agent"
+    first = json.loads(post({"messages": [{"role": "user", "content": "What is x?"}]}))
+    assert first["choices"][0]["message"]["content"] == "x is 1."
+    chat = [{"role": "user", "content": "What is x?"}, {"role": "assistant", "content": "x is 1."},
+            {"role": "user", "content": "And now?"}]
+    events = post({"messages": chat, "stream": True})
+    text = "".join(json.loads(line[6:])["choices"][0]["delta"]["content"] for line in events.splitlines()
+                   if line.startswith("data: {"))
+    assert "- `view` a.py →    1| x = 1" in text and text.endswith("Still 1.") and events.endswith("data: [DONE]\n\n")
+    assert [m["content"] for m in seen[2][0][1:4]] == ["What is x?", "x is 1.", "And now?"]   # the model sees the chat
+    server.shutdown()

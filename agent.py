@@ -49,7 +49,7 @@ FIXER_TOOLS = [bash, view, search, edit] + ([plan] if PLAN else [])
 EXPLORER_TOOLS = [view, search]                # read-only
 CRITIC_TOOLS = [reject]                        # no call = accept
 PROMPTS = {name: (Path(__file__).parent / "prompts" / f"{name}.txt").read_text(encoding="utf-8")
-           for name in ("fixer", "explorer", "critic", "learner")}
+           for name in ("fixer", "explorer", "critic", "learner", "coder")}
 HOOKS = [guard] if GUARDRAILS else []          # run before every tool call; may refuse it
 TEST = PYTEST + "tests/test_visible.py"        # the benchmark's verify command; fix.py passes the project's own
 
@@ -108,9 +108,10 @@ def run_agent(bug_report: str, workdir: Path, seed: int, original: Path, tools: 
 
 
 def loop(system: str, task: str, workdir: Path, tools: list, seed: int, first: int,
-         max_steps: int = MAX_STEPS) -> list[dict]:
+         max_steps: int = MAX_STEPS, history: list = ()) -> list[dict]:
     """The agent loop: tool calls until a reply without one ("done"), the step limit, or a guardrail stop.
-    Returns one timed trace entry per tool call; a reply's text, tokens and latency go with its first call."""
+    `history` is an earlier conversation (chat mode). Returns one timed trace entry per tool call; a reply's text,
+    tokens and latency go with its first call."""
     tools, turns, trace, opened, spent = {t.__name__: t for t in tools}, [], [], [], 0
     for step in range(first, first + max_steps):
         files = "\n\n".join(f"{name}\n{view(workdir, name)}" for name in opened)    # fresh from disk, not memory
@@ -118,7 +119,7 @@ def loop(system: str, task: str, workdir: Path, tools: list, seed: int, first: i
         panel = (f"Your plan and notes:\n{notes}\n\n" if notes else "") + (
             f"Current content of the files you are working on:\n\n{files}" if opened else "")
         older = [mask(turn) for turn in turns[:-KEEP_TURNS]] if COMPACT else []   # compaction: shrink, not drop
-        messages = ([{"role": "system", "content": system}, {"role": "user", "content": task}]
+        messages = ([{"role": "system", "content": system}, *history, {"role": "user", "content": task}]
                     + sum(older + turns[-KEEP_TURNS:], []) + ([{"role": "user", "content": panel}] if panel else []))
         started = time.time()
         message, tokens = ask_model(messages, list(tools.values()), seed=seed * 100 + step)  # same seed, same sample
