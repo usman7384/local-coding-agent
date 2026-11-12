@@ -24,8 +24,9 @@ def traced(tool, send):
     @functools.wraps(tool)
     def run(workdir: Path, **args) -> str:
         result = tool(workdir, **args)
-        first = (result.splitlines() or [""])[0][:80]
-        send(f"- `{tool.__name__}` {' '.join(map(str, args.values()))[:80]} → {first}\n")
+        call = " ".join(" ".join(map(str, args.values())).split())[:80].replace("`", "'")   # one line, as code
+        first = (result.splitlines() or [""])[0][:80].replace("`", "'")
+        send(f"- `{tool.__name__}` `{call}` → `{first}`\n")
         return result
     return run
 

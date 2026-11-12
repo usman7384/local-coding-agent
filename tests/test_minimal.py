@@ -438,6 +438,6 @@ def test_serve_speaks_the_chat_api_streams_tool_calls_and_keeps_the_conversation
     events = post({"messages": chat, "stream": True})
     text = "".join(json.loads(line[6:])["choices"][0]["delta"]["content"] for line in events.splitlines()
                    if line.startswith("data: {"))
-    assert "- `view` a.py →    1| x = 1" in text and text.endswith("Still 1.") and events.endswith("data: [DONE]\n\n")
+    assert "- `view` `a.py` → `   1| x = 1`" in text and text.endswith("Still 1.") and events.endswith("data: [DONE]\n\n")
     assert [m["content"] for m in seen[2][0][1:4]] == ["What is x?", "x is 1.", "And now?"]   # the model sees the chat
     server.shutdown()
