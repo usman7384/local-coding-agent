@@ -1,7 +1,8 @@
-"""Small helpers used by the harness. Nothing in here is about agents; it just keeps the main files short."""
+"""Small helpers used by the harness. Nothing in here decides what the agent does; it just keeps the main files short."""
 
 import ast
 import difflib
+import inspect
 import json
 import random
 import re
@@ -144,6 +145,42 @@ def docstrings(test_source: str) -> dict[str, str]:
             if isinstance(f, ast.FunctionDef) and f.name.startswith("test_")}
 
 
+def tool_spec(tool) -> dict:
+    """A tool function as the chat API describes a tool: its name, its docstring, and its arguments after `workdir`
+    (str -> string, int -> integer; arguments without a default are required)."""
+    args = list(inspect.signature(tool).parameters.values())[1:]
+    kinds = {str: "string", int: "integer"}
+    return {"type": "function", "function": {
+        "name": tool.__name__, "description": inspect.getdoc(tool),
+        "parameters": {"type": "object", "properties": {a.name: {"type": kinds[a.annotation]} for a in args},
+                       "required": [a.name for a in args if a.default is a.empty]}}}
+
+
+def call_tool(tools: dict, workdir: Path, call: dict) -> tuple[str, dict, str]:
+    """Run one tool call from the model: (tool name, arguments, result). A call to an unknown tool, or with
+    arguments that are not JSON or do not fit the tool, runs nothing and is returned as "malformed", with a result
+    the model can read and correct."""
+    name, raw = call["function"]["name"], call["function"].get("arguments") or "{}"
+    try:
+        args = json.loads(raw) if isinstance(raw, str) else raw
+        inspect.signature(tools[name]).bind(workdir, **args)               # the arguments fit the function
+    except (KeyError, TypeError, ValueError):
+        note = f"Nothing was run: {name}({raw}) is not a valid call. The tools are: {', '.join(tools)}."
+        return "malformed", {"tool": name, "arguments": raw}, note
+    return name, args, tools[name](workdir, **args)
+
+
+def next_step(trace: list[dict]) -> int:
+    """The number of the next step in a trace. Steps keep counting across tries, so every try samples differently."""
+    return trace[-1]["step"] + 1 if trace else 1
+
+
+def sub_agent(step: int, action: str, result: str, steps: list[dict]) -> dict:
+    """One trace entry for a sub-agent's whole run: its verdict, its own steps, and the tokens they used."""
+    return {"step": step, "action": action, "result": result, "steps": steps,
+            "tokens_in": sum(s["tokens_in"] for s in steps), "tokens_out": sum(s["tokens_out"] for s in steps)}
+
+
 def fingerprint(output: str) -> str | None:
     """The failing tests and their error lines in pytest output, or None if nothing failed."""
     return "\n".join(sorted(set(re.findall(r"(?m)^(?:FAILED|ERROR|E ) .*", output)))) or None
@@ -151,14 +188,16 @@ def fingerprint(output: str) -> str | None:
 
 def stalls(trace: list[dict]) -> int:
     """How many test runs in a trace failed exactly like the failing run before them: steps that made no progress."""
-    marks = [mark for s in trace if s["action"] == "BASH" and (mark := fingerprint(s["result"]))]
+    marks = [mark for s in trace if s["action"].lower() == "bash" and (mark := fingerprint(s["result"]))]
     return sum(a == b for a, b in zip(marks, marks[1:]))
 
 
-def lesson(attempt: int, diff: str, check: str) -> str:
-    """A lesson from a failed try, for the next one: what it changed in src/, and how the visible tests still fail."""
+def lesson(attempt: int, diff: str, check: str, rejected: str = "") -> str:
+    """A lesson from a failed try, for the next one: what it changed in src/, and how the visible tests still fail
+    or, if they passed, why the critic rejected the change."""
     change = (f"It changed src/ like this, and the files still contain that change:\n{shorten(diff, 800)}" if diff
               else "It left src/ unchanged: its edits failed or were undone.")
-    return (f"\n\nLesson from failed try {attempt} (its conversation is gone): {change}\n"
-            f"The visible tests still fail with:\n{shorten(fingerprint(check) or check, 600)}\n"
+    why = (f"The visible tests pass, but a reviewer rejected the change:\n{shorten(rejected, 600)}" if rejected
+           else f"The visible tests still fail with:\n{shorten(fingerprint(check) or check, 600)}")
+    return (f"\n\nLesson from failed try {attempt} (its conversation is gone): {change}\n{why}\n"
             "Do not repeat what it tried. Find the real cause and fix it.")

@@ -1,15 +1,13 @@
-"""A minimal coding agent.
+"""A coding agent: a model calling tools in a loop.
 
-Each step: send the conversation to the model, take ONE action from its reply, run it with the matching
-tool (see tools.py), and add the result to the conversation. The model writes its action in a fenced block,
-for example:
+Each step sends the conversation and the tool list to the model through its chat API (native tool calling). The
+model answers with tool calls, which run (tools.py) and go back into the conversation, or with plain text, which
+ends the try. Then the harness runs the visible tests itself (verify); if they fail, one more try starts with a
+fresh conversation and a lesson from the failed one.
 
-    ```
-    VIEW: src/ringlog.py
-    ```
-
-and finishes with a block containing only DONE. The harness then runs the visible tests itself (verify); if they
-fail, the agent gets one more try with a fresh conversation and a lesson from the failed one.
+Sub-agents are the same loop with their own prompt and tools. Two are switches, off by default:
+- AGENT_EXPLORER=1: before the first try, a read-only explorer (view, search) says where the bug is.
+- AGENT_CRITIC=1:   after a try whose tests pass, a critic reads the fix and may reject it with an assert that runs.
 """
 
 import json
@@ -19,75 +17,108 @@ import urllib.request
 from pathlib import Path
 
 from grade import PYTEST
-from tools import TOOLS, bash, view
-from utils import diff_dirs, lesson, project_file
+from tools import bash, edit, reject, search, view
+from utils import call_tool, diff_dirs, lesson, next_step, project_file, sub_agent, tool_spec
 
-MODEL = os.environ.get("LLM_MODEL", "arh-qwen3.5-4b-8k")             # Stage 6: replaced qwen2.5-coder 7B
-SERVER = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")
+MODEL = os.environ.get("LLM_MODEL", "arh-qwen3.5-4b-8k")
+SERVER = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")      # any OpenAI-compatible chat API
 URL = SERVER + "/chat/completions"
-SYSTEM_PROMPT = (Path(__file__).parent / "system_prompt.txt").read_text(encoding="utf-8")
 # Reasoning models think before they answer. LLM_THINK="none" (the default) turns that off, and models that do not
 # think ignore it; "" sends nothing. Thinking tokens count against MAX_TOKENS, so a thinking run needs a larger one.
 THINK = os.environ.get("LLM_THINK", "none")
 MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "768"))
+EXPLORER = os.environ.get("AGENT_EXPLORER") == "1"
+CRITIC = os.environ.get("AGENT_CRITIC") == "1"
 
 MAX_STEPS = 20        # each try gets at most 20 model replies
 TRIES = 2             # verify: if the visible tests fail after a try, one more try with a lesson
-KEEP_MESSAGES = 10    # the model sees the system prompt, the bug report and only the last 10 messages
+KEEP_TURNS = 5        # the model sees the system prompt, the bug report and only its last 5 turns (reply + results)
 OPEN_FILES = 2        # the files it viewed or edited most recently are always shown, fresh from disk
+EXPLORER_STEPS = 6    # the explorer gets at most 6 replies to point at the bug
+
+FIXER_TOOLS = [bash, view, search, edit]
+EXPLORER_TOOLS = [view, search]                # read-only: the explorer cannot change anything
+CRITIC_TOOLS = [reject]                        # the critic accepts by answering in text, or calls reject
+PROMPTS = {name: (Path(__file__).parent / "prompts" / f"{name}.txt").read_text(encoding="utf-8")
+           for name in ("fixer", "explorer", "critic")}                # how each agent should behave
 
 
-def ask_model(messages: list[dict], seed: int) -> tuple[str, dict]:
-    """One call to the local model through its OpenAI-compatible chat API. Returns the reply and its token counts."""
-    body = {"model": MODEL, "messages": messages, "seed": seed, "temperature": 0.7, "top_p": 0.9,
-            "max_tokens": MAX_TOKENS, **({"reasoning_effort": THINK} if THINK else {})}  # thinking: only when set
+def ask_model(messages: list[dict], tools: list, seed: int) -> tuple[dict, dict]:
+    """One call to the model through its OpenAI-compatible chat API. Returns its message and the token counts."""
+    body = {"model": MODEL, "messages": messages, "tools": [tool_spec(t) for t in tools], "seed": seed,
+            "temperature": 0.7, "top_p": 0.9, "max_tokens": MAX_TOKENS,
+            **({"reasoning_effort": THINK} if THINK else {})}                 # thinking: only when set
     request = urllib.request.Request(URL, json.dumps(body).encode(), {"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=600) as response:
         answer = json.load(response)
-    usage = answer["usage"]                                             # tokens read and written by this call
-    return answer["choices"][0]["message"]["content"] or "", {"tokens_in": usage["prompt_tokens"],
-                                                        "tokens_out": usage["completion_tokens"]}
-
-
-def parse_action(reply: str) -> tuple[str, str]:
-    """Return (kind, text) of the single action block in the reply, or ("MALFORMED", "")."""
-    blocks = [b.strip() for b in re.findall(r"```[^\n]*\n(.*?)```", reply, re.S)]       # every fenced block
-    actions = [b for b in blocks if b == "DONE" or b.split(":")[0] in TOOLS]          # blocks naming a tool
-    kind, _, text = actions[0].partition(":") if len(actions) == 1 else ("MALFORMED", "", "")
-    return kind, text.strip()
+    usage = answer["usage"]                                                 # tokens read and written by this call
+    return answer["choices"][0]["message"], {"tokens_in": usage["prompt_tokens"], "tokens_out": usage["completion_tokens"]}
 
 
 def run_agent(bug_report: str, workdir: Path, seed: int, original: Path) -> list[dict]:
-    """Up to TRIES tries at the bug. After each, verify with the visible tests; if they fail, start a fresh
-    conversation whose bug report carries a lesson: what the failed try changed and how the tests still fail."""
-    trace, lessons = [], ""
+    """Up to TRIES tries at the bug, each verified by the visible tests (and, with the critic on, a review). If a try
+    fails, the next starts with a fresh conversation whose bug report carries a lesson: what the failed try changed,
+    and how the tests failed or why the critic rejected it."""
+    trace, lessons = ([explore(bug_report, workdir, seed + 1)] if EXPLORER else []), ""   # step 0: where is the bug?
+    if trace and trace[0]["result"]:
+        bug_report += (f"\n\nA read-only explorer looked at the code first. Its guess: {trace[0]['result']}\n"
+                       "Check it yourself before you edit.")
     for attempt in range(1, TRIES + 1):
-        trace += one_try(bug_report + lessons, workdir, seed, first=len(trace) + 1)
-        check = bash(workdir, PYTEST + "tests/test_visible.py")            # verify: do not take DONE on trust
-        if check.startswith("exit code 0") or attempt == TRIES:
+        trace += loop(PROMPTS["fixer"], bug_report + lessons, workdir, FIXER_TOOLS, seed, next_step(trace))
+        check = bash(workdir, PYTEST + "tests/test_visible.py")            # verify: do not take "done" on trust
+        green, diff = check.startswith("exit code 0"), diff_dirs(original, workdir / "src")
+        if green and CRITIC and attempt < TRIES:                            # green tests: the critic reads the fix
+            trace.append(critique(bug_report, workdir, diff, seed + 2, next_step(trace)))
+        rejected = trace[-1]["result"] if trace[-1]["action"] == "REVIEW" and trace[-1]["result"] != "ACCEPT" else ""
+        if (green and not rejected) or attempt == TRIES:
             return trace
-        lessons += lesson(attempt, diff_dirs(original, workdir / "src"), check)  # kept; the old conversation is not
-        trace.append({"step": len(trace) + 1, "action": "RETRY", "result": lessons, "tokens_in": 0, "tokens_out": 0})
+        lessons += lesson(attempt, diff, check, rejected)                  # kept; the old conversation is not
+        trace.append({"step": next_step(trace), "action": "RETRY", "result": lessons, "tokens_in": 0, "tokens_out": 0})
 
 
-def one_try(bug_report: str, workdir: Path, seed: int, first: int) -> list[dict]:
-    """Let the model work on `workdir` until it says DONE or runs out of steps. Returns the step-by-step trace."""
-    history, trace, opened = [], [], []
-    for step in range(first, first + MAX_STEPS):
+def loop(system: str, task: str, workdir: Path, tools: list, seed: int, first: int, max_steps: int = MAX_STEPS) -> list[dict]:
+    """The agent loop: the model calls tools until it answers without one ("done") or runs out of steps. Returns the
+    trace, one entry per tool call; the reply's text and tokens go with its first call."""
+    tools, turns, trace, opened = {t.__name__: t for t in tools}, [], [], []
+    for step in range(first, first + max_steps):
         # "Open files" panel: the real, current content of the files being worked on, so nothing is edited from memory.
         files = "\n\n".join(f"{name}\n{view(workdir, name)}" for name in opened)
         panel = [{"role": "user", "content": f"Current content of the files you are working on:\n\n{files}"}] if opened else []
-        messages = [{"role": "system", "content": SYSTEM_PROMPT},           # how to behave
-                    {"role": "user", "content": bug_report}] + history[-KEEP_MESSAGES:] + panel  # task, recent steps, files
-        reply, tokens = ask_model(messages, seed=seed * 100 + step)         # same seed -> same sampling
-        kind, text = parse_action(reply)
-        if kind == "DONE":
-            return trace + [{"step": step, "reply": reply, "action": "DONE", **tokens}]
-        result = TOOLS[kind](workdir, text)                                 # run the chosen tool
-        trace.append({"step": step, "reply": reply, "action": kind, "result": result, **tokens})
-        name = text.split()[0] if kind in ("VIEW", "EDIT") and text else ""     # the file this action touched
-        opened = ([f for f in opened if f != name] + [name])[-OPEN_FILES:] if project_file(workdir, name) else opened
-        # Small models copy their own past replies, so a malformed one is not kept in the history.
-        shown = reply if kind != "MALFORMED" else "(malformed reply removed)"
-        history += [{"role": "assistant", "content": shown}, {"role": "user", "content": result}]
+        messages = [{"role": "system", "content": system},                  # how to behave
+                    {"role": "user", "content": task}] + sum(turns[-KEEP_TURNS:], []) + panel  # task, recent turns, files
+        message, tokens = ask_model(messages, list(tools.values()), seed=seed * 100 + step)  # same seed, same sampling
+        reply, calls = message.get("content") or "", message.get("tool_calls") or []
+        if not calls:
+            return trace + [{"step": step, "reply": reply, "action": "done", **tokens}]
+        turn = [{"role": "assistant", "content": reply, "tool_calls": calls}]
+        for i, call in enumerate(calls):                                    # a reply may call several tools
+            name, args, result = call_tool(tools, workdir, call)
+            trace.append({"step": step, "reply": "" if i else reply, "action": name, "args": args, "result": result,
+                          **(dict.fromkeys(tokens, 0) if i else tokens)})
+            turn.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": result})
+            path = str(args.get("path", "")) if name in ("view", "edit") else ""   # the file this call touched
+            opened = ([f for f in opened if f != path] + [path])[-OPEN_FILES:] if project_file(workdir, path) else opened
+        turns.append(turn)                                                  # a turn = the reply and its results
     return trace
+
+
+def explore(bug_report: str, workdir: Path, seed: int) -> dict:
+    """The explorer: a sub-agent with a fresh conversation and read-only tools. It sees the bug report and the failing
+    visible tests and answers with where the bug is. Its steps stay inside one EXPLORE entry."""
+    tests = bash(workdir, PYTEST + "tests/test_visible.py")
+    steps = loop(PROMPTS["explorer"], f"{bug_report}\n\nThe visible tests now:\n{tests}", workdir, EXPLORER_TOOLS, seed,
+                 first=1, max_steps=EXPLORER_STEPS)
+    guess = steps[-1]["reply"].strip() if steps[-1]["action"] == "done" else ""   # no answer within its steps: none
+    return sub_agent(0, "EXPLORE", guess, steps)
+
+
+def critique(bug_report: str, workdir: Path, diff: str, seed: int, step: int) -> dict:
+    """The critic: one reply from a sub-agent that reads the bug report and the fix. It accepts by answering in text,
+    or rejects by calling reject with a one-line assert. A model cannot run code in its head, so a rejection counts
+    only if that assert really fails on the fixed code."""
+    names = re.findall(r"(?m)^\+\+\+ b/(\S+)", diff)                         # the files the fix changed
+    files = "\n\n".join(f"src/{name}\n{view(workdir, 'src/' + name)}" for name in names)
+    steps = loop(PROMPTS["critic"], f"{bug_report}\n\nThe fix:\n{diff}\n\nThe changed files now:\n\n{files}", workdir,
+                 CRITIC_TOOLS, seed, first=1, max_steps=1)
+    proof = next((s for s in steps if s["action"] == "reject" and "AssertionError" in s["result"]), None)
+    return sub_agent(step, "REVIEW", f"REJECT: {proof['args']['check']}\n{proof['result']}" if proof else "ACCEPT", steps)

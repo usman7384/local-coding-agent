@@ -29,17 +29,22 @@ print("pass@1 by group:", ", ".join(f"{name} {sum(r['passed'] for r in g) / len(
 print("outcomes:", dict(Counter(r["outcome"] for r in rows)))
 retried = [r for r in rows if r.get("tries", 1) > 1]                   # verify failed, so a second try ran
 print(f"retries: {len(retried)} attempts got a second try, {sum(r['passed'] for r in retried)} of them passed")
-print(f"malformed replies: {sum(r['malformed'] for r in rows)} of {sum(r['steps'] for r in rows)} steps")
+guessed = [r for r in rows if r.get("guess")]                           # the explorer named a place
+reviewed = [r for r in rows if r.get("review")]                         # the critic read a green fix
+rejected = [r for r in reviewed if r["review"].startswith("REJECT")]
+print(f"explorer: a guess in {len(guessed)} of {len(rows)} attempts, {sum(r['passed'] for r in guessed)} passed; "
+      f"critic: {len(reviewed)} reviews, {len(rejected)} rejections, {sum(r['passed'] for r in rejected)} passed")
+print(f"malformed tool calls: {sum(r['malformed'] for r in rows)} in {sum(r['steps'] for r in rows)} steps")
 
 traces = [json.loads(t.read_text(encoding="utf-8")) for t in run.glob("traces/*.json")]
 # Stalls: test runs that failed exactly like the failing run before them, so the steps between made no progress.
 counts = [stalls(trace) for trace in traces]
 print(f"stalls: {sum(counts)} repeated failing test runs, in {sum(c > 0 for c in counts)} of {len(counts)} attempts")
 
-# Edits: how many applied, and how many failed because the OLD text is not in the file (edited from memory).
-edits = [s["result"] for trace in traces for s in trace if s["action"] == "EDIT"]
-print(f"edits: {len(edits)}, applied {sum(e.startswith('EDIT applied') for e in edits) / max(len(edits), 1):.0%}, "
-      f"OLD text not found {sum('appears 0 times' in e for e in edits) / max(len(edits), 1):.0%}")
+# Edits: how many applied, and how many failed because the old text is not in the file (edited from memory).
+edits = [s["result"] for trace in traces for s in trace if s["action"].lower() == "edit"]  # old runs: "EDIT"
+print(f"edits: {len(edits)}, applied {sum(e.lower().startswith('edit applied') for e in edits) / max(len(edits), 1):.0%}, "
+      f"old text not found {sum('appears 0 times' in e for e in edits) / max(len(edits), 1):.0%}")
 
 # Cost: tokens instead of seconds, because seconds depend on how busy the GPU is.
 counted = [r for r in rows if "tokens_in" in r]

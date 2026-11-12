@@ -9,14 +9,14 @@ edit files inside a Docker sandbox, grades the result with tests it never saw, a
 standard library (plus `pytest` for the tests). It is built to grow, one measured stage at a time, into a
 system with every modern agent component.
 
-![How it works](docs/how-it-works.png)
+![How it works](docs/how-it-works.svg)
 
 ## The agent as a graph
 
 The same agent drawn the way LangGraph draws agents: **nodes** are steps, **solid edges** always happen, and
 **dashed edges** are branches chosen by the model's reply.
 
-![Current agent graph](docs/graph-current.png)
+![Current agent graph](docs/graph-current.svg)
 
 - `setup` copies the buggy project into a temp folder and reads the bug report (`run.py`).
 - `call_model` sends the conversation to the local LLM and gets one reply (`agent.ask_model`), with or without
@@ -32,7 +32,7 @@ The same agent drawn the way LangGraph draws agents: **nodes** are steps, **soli
 
 Where it is going: the planned graph. Every node is tagged with the stage that adds it.
 
-![Future agent graph](docs/graph-future.png)
+![Future agent graph](docs/graph-future.svg)
 
 ## The files
 

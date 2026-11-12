@@ -1,84 +1,70 @@
-"""The agent's tools. Each one gets the project folder and the text after "NAME:" and returns what the model sees.
+"""The agent's tools, offered to the model through native tool calling.
 
-    BASH: <command>            run a shell command in the Docker sandbox (tests, ls, ...)
-    VIEW: <file> [10-30]       show a file (or some of its lines) with line numbers
-    SEARCH: <text>             list every line containing the text, as file:line: code
-    EDIT: <file>               replace text in a file (refused if the result is not valid Python), written as
-          <<<<<<< OLD
-          exact old lines
-          =======
-          new lines
-          >>>>>>> NEW
-
-Adding a tool = writing its function and adding one line to TOOLS at the bottom.
+A tool is a plain function. Its name, docstring and typed arguments become the description the model sees
+(`utils.tool_spec`), and the model's call comes back as keyword arguments (`utils.call_tool`). Every tool gets the
+project folder first and returns the text the model reads next. Adding a tool = writing one function and adding it
+to the tool list of the agent that may use it (agent.py).
 """
 
 import re
+import shlex
 from pathlib import Path
 
 import sandbox
 from utils import match_indentation, project_file, shorten, steady, syntax_error
 
 MAX_OUTPUT = 3000     # characters of tool output shown to the model (every task file fits whole)
-EDIT_FORMAT = re.compile(r"(\S+)\n<<<<<<< OLD\n(.*?)\n=======\n(.*?)\n?>>>>>>> NEW", re.S)
 
 
 def bash(workdir: Path, command: str) -> str:
-    """Run a shell command in the sandbox and show its exit code and (shortened) output."""
+    """Run a shell command in the project root, inside a sandbox (no network, 30-second limit). Use it to list
+    files and to run the tests: python -m pytest -q tests/test_visible.py"""
     code, output = sandbox.run(workdir, command)
     return f"exit code {code}\n{shorten(steady(output), MAX_OUTPUT)}"  # steady: no timings or addresses
 
 
-def view(workdir: Path, text: str) -> str:
-    """Show a file with line numbers, all of it ("src/a.py") or a range ("src/a.py 10-30")."""
-    match = re.fullmatch(r"(\S+)(?:\s+(\d+)-(\d+))?", text)
-    file = project_file(workdir, match[1]) if match else None
+def view(workdir: Path, path: str, start: int = 1, end: int = 0) -> str:
+    """Show a file with line numbers: all of it, or only lines start to end."""
+    file = project_file(workdir, str(path))
     if not file:
-        return "VIEW failed: write an existing file name, optionally followed by a line range like 10-30."
+        return f"view failed: {path} does not exist."
     lines = file.read_text(encoding="utf-8").splitlines()
-    start, end = int(match[2] or 1), int(match[3] or len(lines))
-    return shorten("\n".join(f"{i:>4}| {lines[i - 1]}" for i in range(max(start, 1), min(end, len(lines)) + 1)),
-                   MAX_OUTPUT)
+    first, last = max(int(start), 1), min(int(end) or len(lines), len(lines))
+    return shorten("\n".join(f"{i:>4}| {lines[i - 1]}" for i in range(first, last + 1)), MAX_OUTPUT)
 
 
 def search(workdir: Path, text: str) -> str:
-    """Every line containing `text` in the project's .py files, as file:line: code."""
+    """List every line of the project's .py files that contains the text, as file:line: code."""
     hits = [f"{p.relative_to(workdir).as_posix()}:{i}: {line.strip()}"
             for p in sorted(workdir.rglob("*.py"))
             for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1) if text and text in line]
     return shorten("\n".join(hits) or f"No line contains {text!r}.", MAX_OUTPUT)
 
 
-def edit(workdir: Path, text: str) -> str:
-    """Replace the OLD text with the NEW text in a file. OLD must appear exactly once."""
-    match = EDIT_FORMAT.fullmatch(text)
-    if not match:
-        return "EDIT failed: write the file name, then <<<<<<< OLD, =======, >>>>>>> NEW lines."
-    name, old, new = match.groups()
-    if name.split("/")[0] in sandbox.READ_ONLY:                              # guardrail: tests are read-only
-        return f"EDIT refused: {name} is read-only. The tests define the expected behavior; fix the code in src/."
-    old, new = (re.sub(r"(?m)^ *\d+\| ?", "", part) for part in (old, new))  # drop "  35| " copied from VIEW
-    file = project_file(workdir, name)
+def edit(workdir: Path, path: str, old: str, new: str) -> str:
+    """Replace the old text with the new text in a file. Copy old exactly from the file, with its indentation but
+    without the line numbers that view shows; it must appear exactly once. An edit that would leave the file
+    invalid Python is refused, and the tests are read-only."""
+    if str(path).split("/")[0] in sandbox.READ_ONLY:                           # guardrail: tests are read-only
+        return f"edit refused: {path} is read-only. The tests define the expected behavior; fix the code in src/."
+    old, new = (re.sub(r"(?m)^ *\d+\| ?", "", part) for part in (old, new))  # drop "  35| " copied from view
+    file = project_file(workdir, str(path))
     if not file:
-        return f"EDIT failed: {name} does not exist."
+        return f"edit failed: {path} does not exist."
     content = file.read_text(encoding="utf-8")
     old, new, note = (old, new, "") if content.count(old) == 1 else match_indentation(content, old, new)
     if content.count(old) != 1:
-        return f"EDIT failed: the OLD text appears {content.count(old)} times in {name}; it must appear once."
+        return f"edit failed: the old text appears {content.count(old)} times in {path}; it must appear once."
     updated = content.replace(old, new)
-    broken = syntax_error(updated) if name.endswith(".py") else None        # lint on edit: never save broken code
+    broken = syntax_error(updated) if str(path).endswith(".py") else None   # lint on edit: never save broken code
     if broken:
-        return f"EDIT refused, nothing was changed: {name} would no longer be valid Python ({broken})."
+        return f"edit refused, nothing was changed: {path} would no longer be valid Python ({broken})."
     file.write_text(updated, encoding="utf-8", newline="\n")
-    return f"EDIT applied to {name}.{note}"
+    return f"edit applied to {path}.{note}"
 
 
-# Action name -> tool. The agent's parser accepts any name in this dict.
-TOOLS = {
-    "BASH": bash,
-    "VIEW": view,
-    "SEARCH": search,
-    "EDIT": edit,
-    "MALFORMED": lambda workdir, text: "Nothing was run. Reply with exactly one fenced block: "
-                                       "BASH:, VIEW:, SEARCH:, EDIT: or DONE.",
-}
+def reject(workdir: Path, check: str) -> str:
+    """Reject the fix, with proof: one line of Python, run from src/, that imports what it needs and asserts what
+    one call should return according to the bug report or the docstrings. It runs on the fixed code for real, and
+    the rejection counts only if the assert fails."""
+    return bash(workdir, "cd src && python -c " + shlex.quote(check))
