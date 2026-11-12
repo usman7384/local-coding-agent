@@ -23,3 +23,5 @@ wallet-d2b
 wallet-d2c
 wallet-d2d
 wallet-d3
+router-d4
+wallet-d4

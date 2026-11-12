@@ -1,0 +1,14 @@
+Bug report
+
+Something in this small Python project is broken. Behavior that users rely on no longer works as documented:
+
+  Expected: With homework weighted 40 and exam 60, scoring 17/20 and 45/50 should give a final grade of 88.
+  Expected: A student with only an 80/100 homework score under weights 40 and 60 should still have a final grade of 80.
+  Expected: Dropping the lowest 1 homework score from 50, 90 and 70 out of 100 should give a final grade of 80.
+  Expected: A 90/100 score handed in 2 days late should count as 70, and 5 days late should lose only 30 points and count as 60.
+  Expected: Final grades of 90, 89 and 59 percent should earn the letters A, B and F.
+
+Right now the project does not meet these expectations. Find the bug in the source code under src/ and fix it. Do not modify the tests.
+
+Reproduce with:
+  python -m pytest -q tests/test_visible.py

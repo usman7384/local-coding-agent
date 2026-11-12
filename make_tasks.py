@@ -1,6 +1,7 @@
 """Make bug-fixing tasks from the correct projects in corpus/. This is mutation testing: no model is involved.
 
     python make_tasks.py --per-project 8
+    python make_tasks.py --d4        # add one task with three bugs in three files per three-file project
 
 For each project: break one line in one of the ways listed in BUGS (or delete it, drop a return value, or use
 the wrong variable), and keep the break only if the tests catch it. Then add tasks until the project has
@@ -119,6 +120,7 @@ def write_task(tasks: Path, name: str, project: Path, meta: dict, bugs: list[dic
 parser = argparse.ArgumentParser()
 parser.add_argument("--per-project", type=int, default=5)
 parser.add_argument("--seed", type=int, default=7)
+parser.add_argument("--d4", action="store_true")
 args = parser.parse_args()
 tasks = Path("tasks")
 
@@ -149,8 +151,18 @@ for project in sorted(Path("corpus").iterdir()):
     d3 = next(((p, f) for p in pairs if (f := caught(project, broken(project, meta, p)))), None)  # first one caught
     chosen += [d3] if d3 and want_d3 else []
 
+    # D4: three bugs in three files, the hardest kind. A few caught bugs per file, then the first triple caught.
+    if args.d4 and len(meta["files"]) >= 3 and not (tasks / f"{project.name}-d4").exists():
+        per_file = {file: [] for file in meta["files"][:3]}
+        for bug in (b for b in pool if b["file"] in per_file):
+            if len(per_file[bug["file"]]) < 3 and caught(project, broken(project, meta, [bug])):
+                per_file[bug["file"]].append(bug)
+        triples = (list(t) for t in itertools.product(*per_file.values()))
+        d4 = next(((t, f) for t in triples if (f := caught(project, broken(project, meta, t)))), None)
+        chosen += [d4] if d4 else []
+
     for bugs, fails in chosen:
-        level = "d3" if len(bugs) == 2 else bugs[0]["level"]
+        level = {2: "d3", 3: "d4"}.get(len(bugs), bugs[0]["level"])
         name = next(n for n in (f"{project.name}-{level}{s}" for s in ["", *"bcdefgh"]) if not (tasks / n).exists())
         write_task(tasks, name, project, meta, bugs, fails)
         print(name, [(b["file"], b["line"] + 1, b["new"]) for b in bugs], flush=True)

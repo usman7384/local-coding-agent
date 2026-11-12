@@ -9,10 +9,10 @@ Each folder is one bug-fixing task:
 | `hidden/test_hidden.py` | Extra tests used only for grading; the agent never sees them |
 | `solution/` | The correct version of the file(s) that contain the bug |
 
-There are 119 tasks, 8 from each of the 15 projects in [`../corpus/`](../corpus/) (7 from inventory), made by
+There are 125 tasks, 8 from each of the 15 projects in [`../corpus/`](../corpus/) (7 from inventory) plus 6 D4 tasks, made by
 [`../make_tasks.py`](../make_tasks.py). The id says the project and the difficulty (a letter is added when a
 project has several of one kind): `d1` = bug in a function the test calls, `d2` = bug in a helper one
-call away, `d3` = two bugs in two files.
+call away, `d3` = two bugs in two files, `d4` = three bugs in three files.
 
 | Task | Difficulty | File | Correct code | Buggy code |
 |---|---|---|---|---|
@@ -25,6 +25,9 @@ call away, `d3` = two bugs in two files.
 | booking-d2d | D2 | `src/rooms.py` | `return total` | (line deleted) |
 | booking-d3 | D3 | `src/planner.py` | `room = min(fits, key=lambda r: r.capacity)` | (line deleted) |
 | booking-d3 | D3 | `src/slots.py` | `if b_start > cursor:` | `if b_start > busy:` |
+| booking-d4 | D4 | `src/planner.py` | `return used * 100 // (DAY_END - DAY_START)` | (line deleted) |
+| booking-d4 | D4 | `src/rooms.py` | `return [(start, end) for start, end, _ in self.bookings]` | `return` |
+| booking-d4 | D4 | `src/slots.py` | `cursor = start` | (line deleted) |
 | gradebook-d1 | D1 | `src/report.py` | `result.append((student, rank))` | (line deleted) |
 | gradebook-d1b | D1 | `src/report.py` | `if value is not None:` | `if student is not None:` |
 | gradebook-d1c | D1 | `src/report.py` | `value = self.final(student)` | (line deleted) |
@@ -34,6 +37,9 @@ call away, `d3` = two bugs in two files.
 | gradebook-d2d | D2 | `src/scores.py` | `return (points * 200 + possible) // (possible * 2)` | `return (points * 200 - possible) // (possible * 2)` |
 | gradebook-d3 | D3 | `src/report.py` | `rank = index + 1` | `rank = index - 1` |
 | gradebook-d3 | D3 | `src/scores.py` | `n = max(min(n, len(percents) - 1), 0)` | `n = min(min(n, len(percents) - 1), 0)` |
+| gradebook-d4 | D4 | `src/report.py` | `if value is not None:` | `if student is not None:` |
+| gradebook-d4 | D4 | `src/scores.py` | `return (sum(values) * 2 + count) // (count * 2)` | `return (sum(values) * 2 - count) // (count * 2)` |
+| gradebook-d4 | D4 | `src/weights.py` | `return (points * 2 + total) // (total * 2)` | `return (points * 2 - total) // (total * 2)` |
 | inventory-d1 | D1 | `src/stock.py` | `return self.on_hand(sku) - self.reserved.get(sku, 0)` | `return self.on_hand(sku) + self.reserved.get(sku, 0)` |
 | inventory-d1b | D1 | `src/stock.py` | `self.reserved[sku] = self.reserved.get(sku, 0) + qty` | `self.reserved[sku] = self.reserved.get(sku, 0) + sku` |
 | inventory-d2 | D2 | `src/stock.py` | `if qty > held:` | `if qty >= held:` |
@@ -98,6 +104,9 @@ call away, `d3` = two bugs in two files.
 | router-d2d | D2 | `src/convert.py` | `if kind != "path" and kind not in CONVERTERS:` | `if kind == "path" and kind not in CONVERTERS:` |
 | router-d3 | D3 | `src/router.py` | `return name, params` | `return` |
 | router-d3 | D3 | `src/segments.py` | `if part[i] == "%" and is_hex(code):` | `if part[i] == "%" and is_hex(part):` |
+| router-d4 | D4 | `src/convert.py` | `return int(text)` | (line deleted) |
+| router-d4 | D4 | `src/router.py` | `hit = match_route(specs, parts)` | `found = match_route(specs, parts)` |
+| router-d4 | D4 | `src/segments.py` | `if part[i] == "%" and is_hex(code):` | `if part[i] == "%" and is_hex(part):` |
 | shipping-d1 | D1 | `src/quote.py` | `return 0` | `return` |
 | shipping-d1b | D1 | `src/quote.py` | `return self.subtotal()` | `return` |
 | shipping-d1c | D1 | `src/quote.py` | `self.parcels.append((grams, length, width, height))` | `self.parcels.append((width, length, width, height))` |
@@ -107,6 +116,9 @@ call away, `d3` = two bugs in two files.
 | shipping-d2d | D2 | `src/rates.py` | `return BASE_PRICE + extra_kg(grams) * PER_KG` | `return BASE_PRICE - extra_kg(grams) * PER_KG` |
 | shipping-d3 | D3 | `src/quote.py` | `return length * width * height * 1000 // VOLUME_DIVISOR` | `return length * width * width * 1000 // VOLUME_DIVISOR` |
 | shipping-d3 | D3 | `src/rates.py` | `whole += 1` | `grams += 1` |
+| shipping-d4 | D4 | `src/quote.py` | `return 0` | `return` |
+| shipping-d4 | D4 | `src/rates.py` | `if grams % 1000 > 0:` | `if whole % 1000 > 0:` |
+| shipping-d4 | D4 | `src/zones.py` | `return COUNTRIES.get(country, "world")` | `return COUNTRIES.get(postcode, "world")` |
 | snapshots-d1 | D1 | `src/snapshots.py` | `number = existing[-1] + 1 if existing else 1` | `number = existing[-1] - 1 if existing else 1` |
 | snapshots-d1b | D1 | `src/snapshots.py` | `number = existing[-1] + 1 if existing else 1` | `number = existing[0] + 1 if existing else 1` |
 | snapshots-d1c | D1 | `src/snapshots.py` | `return number` | (line deleted) |
@@ -124,6 +136,9 @@ call away, `d3` = two bugs in two files.
 | tablefmt-d2d | D2 | `src/cells.py` | `return isinstance(value, (int, float))` | (line deleted) |
 | tablefmt-d3 | D3 | `src/columns.py` | `widths.append(min(longest, cap))` | `widths.append(min(longest, widths))` |
 | tablefmt-d3 | D3 | `src/render.py` | `if totals:` | `if texts:` |
+| tablefmt-d4 | D4 | `src/cells.py` | `if len(text) <= width:` | `if len(width) <= width:` |
+| tablefmt-d4 | D4 | `src/columns.py` | `longest = max(longest, len(row[i]))` | `longest = max(longest, len(row[headers]))` |
+| tablefmt-d4 | D4 | `src/render.py` | `cells = []` | (line deleted) |
 | timespan-d1 | D1 | `src/timespan.py` | `total = 0` | `total = 1` |
 | timespan-d1b | D1 | `src/timespan.py` | `if len(parts) == max_units:` | `if len(parts) != max_units:` |
 | timespan-d1c | D1 | `src/timespan.py` | `total += amount * UNIT_SECONDS[unit]` | (line deleted) |
@@ -141,6 +156,9 @@ call away, `d3` = two bugs in two files.
 | wallet-d2d | D2 | `src/account.py` | `return self.balance() + self.overdraft` | `return` |
 | wallet-d3 | D3 | `src/account.py` | `if amount <= 0:` | `if memo <= 0:` |
 | wallet-d3 | D3 | `src/bank.py` | `target.deposit(amount, "transfer from " + src)` | `target.deposit(amount, "transfer from " - src)` |
+| wallet-d4 | D4 | `src/account.py` | `if amount > self.available():` | (line deleted) |
+| wallet-d4 | D4 | `src/bank.py` | `charged.append(name)` | `account.append(name)` |
+| wallet-d4 | D4 | `src/history.py` | `return list(self.entries[-count:])` | (line deleted) |
 | workdays-d1 | D1 | `src/workdays.py` | `current += timedelta(days=step)` | `current -= timedelta(days=step)` |
 | workdays-d1b | D1 | `src/workdays.py` | `count += 1` | `count -= 1` |
 | workdays-d1c | D1 | `src/workdays.py` | `return date(year, month, min(day.day, last))` | `return date(year, month, max(day.day, last))` |
@@ -154,14 +172,15 @@ The first 45 (listed in [`bench-45.txt`](bench-45.txt)) are the original set tha
 `python run.py --tasks tasks/bench-45.txt` runs only them. The other 74 were added in Stage 7: three more from each
 of the 9 original projects, and 8 from each of 6 new, larger projects (booking, gradebook, router, shipping,
 tablefmt, wallet), with three new kinds of bug: a `return` that lost its value, the wrong variable, and a dropped
-copy.
+copy. The 6 D4 tasks (one per three-file project, `make_tasks.py --d4`) came later, to keep the set ahead of
+the agent; [`bench-119.txt`](bench-119.txt) lists the 119 before them.
 
 ## Held out
 
-These 25 tasks (listed in [`held_out.txt`](held_out.txt)) are never read while designing a stage: their traces stay
+These 27 tasks (listed in [`held_out.txt`](held_out.txt)) are never read while designing a stage: their traces stay
 unopened and no prompt or tool is tuned on them. They are graded in every run, so a stage that only works on the
 tasks it was tuned on shows up as a gap between the two groups (`report.py` prints pass@1 for each). They are one
 task of each original project, and every task of two whole new projects (router and wallet), so that no stage can
 be tuned on code it is tested on.
 
-`inventory-d2b`, `invoice-d2b`, `kvconfig-d1`, `numtools-d1c`, `recent-d2b`, `ringlog-d1e`, `snapshots-d1d`, `timespan-d1c`, `workdays-d2b`, `router-d1`, `router-d1b`, `router-d1c`, `router-d2`, `router-d2b`, `router-d2c`, `router-d2d`, `router-d3`, `wallet-d1`, `wallet-d1b`, `wallet-d1c`, `wallet-d2`, `wallet-d2b`, `wallet-d2c`, `wallet-d2d`, `wallet-d3`
+`inventory-d2b`, `invoice-d2b`, `kvconfig-d1`, `numtools-d1c`, `recent-d2b`, `ringlog-d1e`, `snapshots-d1d`, `timespan-d1c`, `workdays-d2b`, `router-d1`, `router-d1b`, `router-d1c`, `router-d2`, `router-d2b`, `router-d2c`, `router-d2d`, `router-d3`, `wallet-d1`, `wallet-d1b`, `wallet-d1c`, `wallet-d2`, `wallet-d2b`, `wallet-d2c`, `wallet-d2d`, `wallet-d3`, `router-d4`, `wallet-d4`
