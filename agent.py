@@ -20,7 +20,8 @@ from pathlib import Path
 
 from grade import PYTEST
 from tools import NOTES, bash, edit, plan, reject, search, view
-from utils import call_tool, diff_dirs, lesson, mask, next_step, project_file, sub_agent, tool_spec, transient
+from utils import (call_tool, diff_dirs, harness_step, lesson, mask, next_step, project_file, restore, sub_agent,
+                   tool_spec, transient)
 
 MODEL = os.environ.get("LLM_MODEL", "arh-qwen3.5-4b-8k")
 SERVER = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1")      # any OpenAI-compatible chat API
@@ -35,6 +36,8 @@ EXPLORER = os.environ.get("AGENT_EXPLORER") == "1"
 CRITIC = os.environ.get("AGENT_CRITIC") == "1"
 PLAN = os.environ.get("AGENT_PLAN") == "1"              # a plan tool; the plan is shown at every step
 COMPACT = os.environ.get("AGENT_COMPACT") == "1"        # older turns stay in view, their results shrunk
+SAMPLES = int(os.environ.get("AGENT_SAMPLES", "1"))     # best-of-N: independent samples until one passes verify
+SWITCHES = {"explorer": EXPLORER, "critic": CRITIC, "plan": PLAN, "compact": COMPACT, "samples": SAMPLES}  # recorded
 
 MAX_STEPS = 20        # each try gets at most 20 model replies
 TRIES = 2             # verify: if the visible tests fail after a try, one more try with a lesson
@@ -71,24 +74,33 @@ def ask_model(messages: list[dict], tools: list, seed: int) -> tuple[dict, dict]
 
 
 def run_agent(bug_report: str, workdir: Path, seed: int, original: Path) -> list[dict]:
-    """Up to TRIES tries at the bug, each verified by the visible tests (and, with the critic on, a review). If a try
-    fails, the next starts with a fresh conversation whose bug report carries a lesson: what the failed try changed,
-    and how the tests failed or why the critic rejected it."""
-    trace, lessons = ([explore(bug_report, workdir, seed + 1)] if EXPLORER else []), ""   # step 0: where is the bug?
+    """Up to SAMPLES independent samples (best-of-N), each from the original code, until one is accepted. A sample is
+    up to TRIES tries, each verified by the visible tests (and, with the critic on, a review). After a failed try the
+    next starts with a fresh conversation whose bug report carries a lesson: what the failed try changed, and how
+    the tests failed or why the critic rejected it."""
+    trace = [explore(bug_report, workdir, seed + 1)] if EXPLORER else []          # step 0: where is the bug?
     if trace and trace[0]["result"]:
         bug_report += (f"\n\nA read-only explorer looked at the code first. Its guess: {trace[0]['result']}\n"
                        "Check it yourself before you edit.")
-    for attempt in range(1, TRIES + 1):
-        trace += loop(PROMPTS["fixer"], bug_report + lessons, workdir, FIXER_TOOLS, seed, next_step(trace))
-        check = bash(workdir, PYTEST + "tests/test_visible.py")            # verify: do not take "done" on trust
-        green, diff = check.startswith("exit code 0"), diff_dirs(original, workdir / "src")
-        if green and CRITIC and attempt < TRIES:                            # green tests: the critic reads the fix
-            trace.append(critique(bug_report, workdir, diff, seed + 2, next_step(trace)))
-        rejected = trace[-1]["result"] if trace[-1]["action"] == "REVIEW" and trace[-1]["result"] != "ACCEPT" else ""
-        if (green and not rejected) or attempt == TRIES:
-            return trace
-        lessons += lesson(attempt, diff, check, rejected)                  # kept; the old conversation is not
-        trace.append({"step": next_step(trace), "action": "RETRY", "result": lessons, "tokens_in": 0, "tokens_out": 0})
+    for sample in range(SAMPLES):
+        if sample:                                         # best-of-N: the next sample starts from the original code
+            restore(original, workdir / "src")
+            (workdir / NOTES).unlink(missing_ok=True)
+            trace.append(harness_step(trace, "SAMPLE"))
+        lessons = ""
+        for attempt in range(1, TRIES + 1):                # steps keep counting, so every try samples differently
+            trace += loop(PROMPTS["fixer"], bug_report + lessons, workdir, FIXER_TOOLS, seed, next_step(trace))
+            check = bash(workdir, PYTEST + "tests/test_visible.py")            # verify: do not take "done" on trust
+            green, diff = check.startswith("exit code 0"), diff_dirs(original, workdir / "src")
+            if green and CRITIC and attempt < TRIES:                            # green tests: the critic reads the fix
+                trace.append(critique(bug_report, workdir, diff, seed + 2, next_step(trace)))
+            rejected = trace[-1]["result"] if trace[-1]["action"] == "REVIEW" and trace[-1]["result"] != "ACCEPT" else ""
+            if green and not rejected:
+                return trace
+            if attempt < TRIES:
+                lessons += lesson(attempt, diff, check, rejected)              # kept; the old conversation is not
+                trace.append(harness_step(trace, "RETRY", lessons))
+    return trace
 
 
 def loop(system: str, task: str, workdir: Path, tools: list, seed: int, first: int, max_steps: int = MAX_STEPS) -> list[dict]:

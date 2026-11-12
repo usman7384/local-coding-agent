@@ -17,7 +17,7 @@ import zlib
 from pathlib import Path
 
 import sandbox
-from agent import CRITIC, EXPLORER, MAX_TOKENS, MODEL, PRICES, SERVER, THINK, run_agent
+from agent import MAX_TOKENS, MODEL, PRICES, SERVER, SWITCHES, THINK, run_agent
 from grade import grade
 from utils import append_jsonl, diff_dirs, provenance, read_jsonl
 
@@ -34,10 +34,9 @@ out = Path("results") / args.run_id
 (out / "traces").mkdir(parents=True, exist_ok=True)
 rows = read_jsonl(out / "results.jsonl")
 finished = {(row["task"], row["repeat"]) for row in rows}           # for resuming
-stamp = {**provenance(MODEL, SERVER), "think": THINK, "max_tokens": MAX_TOKENS,   # commit, model digest, Ollama, ...
-         "explorer": EXPLORER, "critic": CRITIC}                                   # ... and which sub-agents ran
+stamp = {**provenance(MODEL, SERVER), "think": THINK, "max_tokens": MAX_TOKENS, **SWITCHES}  # commit, model, switches
 # Resuming with other code, another model or other switches would mix two experiments in one run.
-keys = ("commit", "model_digest", "think", "max_tokens", "explorer", "critic")
+keys = ("commit", "model_digest", "think", "max_tokens", *SWITCHES)
 changed = sorted({key for row in rows for key in keys if row.get(key, stamp[key]) != stamp[key]})
 if changed:
     sys.exit(f"This run was started with a different {' and '.join(changed)}. Use a new --run-id.")
@@ -66,8 +65,9 @@ for repeat in range(args.repeats):          # all tasks once, then all tasks aga
                    else "wrong_fix" if said_done else "ran_out_of_steps")
         verdicts = {s["action"]: s["result"] for s in trace if s["action"] in ("EXPLORE", "REVIEW")}  # sub-agents
         record = {"task": task.name, "repeat": repeat, "seed": seed, **result, "outcome": outcome,
-                  "steps": len({s["step"] for s in trace if s["action"] not in ("EXPLORE", "REVIEW", "RETRY")}),
-                  "tries": 1 + actions.count("RETRY"), "guess": verdicts.get("EXPLORE"), "review": verdicts.get("REVIEW"),
+                  "steps": len({s["step"] for s in trace if s["action"] not in ("EXPLORE", "REVIEW", "RETRY", "SAMPLE")}),
+                  "tries": 1 + actions.count("RETRY") + actions.count("SAMPLE"), "samples": 1 + actions.count("SAMPLE"),
+                  "guess": verdicts.get("EXPLORE"), "review": verdicts.get("REVIEW"),
                   "malformed": actions.count("malformed"),
                   "tokens_in": sum(s["tokens_in"] for s in trace), "tokens_out": sum(s["tokens_out"] for s in trace),
                   "seconds": round(time.time() - start, 1), **stamp, "diff": diff}

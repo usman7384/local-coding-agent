@@ -29,6 +29,9 @@ print("pass@1 by group:", ", ".join(f"{name} {sum(r['passed'] for r in g) / len(
 print("outcomes:", dict(Counter(r["outcome"] for r in rows)))
 retried = [r for r in rows if r.get("tries", 1) > 1]                   # verify failed, so a second try ran
 print(f"retries: {len(retried)} attempts got a second try, {sum(r['passed'] for r in retried)} of them passed")
+sampled = [r for r in rows if r.get("samples", 1) > 1]                  # best-of-N needed another sample
+if sampled:
+    print(f"best-of-N: {len(sampled)} attempts needed another sample, {sum(r['passed'] for r in sampled)} passed")
 guessed = [r for r in rows if r.get("guess")]                           # the explorer named a place
 reviewed = [r for r in rows if r.get("review")]                         # the critic read a green fix
 rejected = [r for r in reviewed if r["review"].startswith("REJECT")]

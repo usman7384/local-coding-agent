@@ -329,3 +329,18 @@ def test_compaction_masks_old_results_but_keeps_decisions():
     assert masked[0] == turn[0]                                                   # the decision stays
     assert masked[1]["content"].splitlines()[0] == "exit code 1" and "FAILED tests/test_visible.py::test_a" in masked[1]["content"]
     assert "1 failed" not in masked[1]["content"] and masked[1]["content"].endswith("[older result shortened]")
+
+
+def test_best_of_n_starts_each_sample_from_the_original_code(tmp_path, monkeypatch):
+    original, work = tmp_path / "original", tmp_path / "work"
+    for folder in (original, work / "src"):
+        folder.mkdir(parents=True)
+        (folder / "a.py").write_text("x = 1\n")
+    fake_model(monkeypatch, [call("edit", path="src/a.py", old="x = 1", new="x = 2"), answer(), answer(),  # sample 1
+                             call("edit", path="src/a.py", old="x = 1", new="x = 3"), answer()])           # sample 2
+    verdicts = iter([(1, "FAILED tests/test_visible.py::test_a"), (1, "FAILED tests/test_visible.py::test_a"), (0, "ok")])
+    monkeypatch.setattr(tools.sandbox, "run", lambda workdir, command: next(verdicts))  # fail, fail, then pass
+    monkeypatch.setattr(agent, "SAMPLES", 2)
+    trace = agent.run_agent("Fix it.", work, seed=1, original=original)
+    assert [s["action"] for s in trace] == ["edit", "done", "RETRY", "done", "SAMPLE", "edit", "done"]
+    assert (work / "src" / "a.py").read_text() == "x = 3\n"         # "x = 1" was there again: a fresh sample

@@ -6,6 +6,7 @@ import inspect
 import json
 import random
 import re
+import shutil
 import subprocess
 import urllib.request
 from collections import defaultdict
@@ -188,6 +189,17 @@ def mask(turn: list[dict]) -> list[dict]:
 def next_step(trace: list[dict]) -> int:
     """The number of the next step in a trace. Steps keep counting across tries, so every try samples differently."""
     return trace[-1]["step"] + 1 if trace else 1
+
+
+def harness_step(trace: list[dict], action: str, result: str = "") -> dict:
+    """A trace entry for a step the harness takes itself (RETRY, SAMPLE): no model call, no tokens."""
+    return {"step": next_step(trace), "action": action, "result": result, "tokens_in": 0, "tokens_out": 0}
+
+
+def restore(original: Path, src: Path) -> None:
+    """Put the original code back, so a new sample starts from the buggy project, not from another sample's edits."""
+    shutil.rmtree(src, ignore_errors=True)
+    shutil.copytree(original, src)
 
 
 def sub_agent(step: int, action: str, result: str, steps: list[dict]) -> dict:
